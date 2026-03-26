@@ -51,6 +51,14 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'corsheaders.middleware.CorsMiddleware',
+    'django.middleware.security.SecurityMiddleware',
+    'django.contrib.sessions.middleware.SessionMiddleware',
+
+    'core.middleware.LogMiddleware',
+    'core.middleware.ErrorMiddleware',
+    #'core.middleware.AuthMiddleware',
+
+    'django.middleware.common.CommonMiddleware',
 ]
 
 CORS_ALLOW_ALL_ORIGINS = True
@@ -80,11 +88,11 @@ WSGI_APPLICATION = 'config.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'nombre_db',
+        'NAME': 'railway',
         'USER': 'postgres',
-        'PASSWORD': '',
-        'HOST': '',
-        'PORT': '5432',
+        'PASSWORD': 'fiYYvFYyAHnOxhuGpKqRwKJquBMlwGrZ',
+        'HOST': 'gondola.proxy.rlwy.net',
+        'PORT': '30484',
     }
 }
 # Password validation
