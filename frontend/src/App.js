@@ -1,12 +1,7 @@
-import React from 'react';
-import Login from './login/Login'; 
+import AppRouter from "./app/AppRouter";
 
 function App() {
-  return (
-    <div>
-      <Login />
-    </div>
-  );
+  return <AppRouter />;
 }
 
 export default App;

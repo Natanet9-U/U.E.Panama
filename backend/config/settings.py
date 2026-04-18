@@ -11,6 +11,9 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -45,23 +48,20 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
-    'django.middleware.security.SecurityMiddleware',
-    'django.contrib.sessions.middleware.SessionMiddleware',
-
     'core.middleware.LogMiddleware',
     'core.middleware.ErrorMiddleware',
-    #'core.middleware.AuthMiddleware',
-
-    'django.middleware.common.CommonMiddleware',
+    'core.middleware.AuthMiddleware',
 ]
 
 CORS_ALLOW_ALL_ORIGINS = True
+AUTH_TOKEN_MAX_AGE = int(os.environ.get('AUTH_TOKEN_MAX_AGE', 60 * 60 * 24))
+AUTH_TOKEN_SALT = os.environ.get('AUTH_TOKEN_SALT', 'ue.panama.auth')
 ROOT_URLCONF = 'config.urls'
 
 TEMPLATES = [
