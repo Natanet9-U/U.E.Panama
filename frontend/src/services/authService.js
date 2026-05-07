@@ -32,6 +32,10 @@ export function getStoredUser() {
 }
 
 export function isAuthenticated() {
+  //Poner false para requerir login
+  const DEVELOPMENT_MODE = true;
+  if (DEVELOPMENT_MODE) return true;
+  
   return Boolean(localStorage.getItem(TOKEN_KEY));
 }
 

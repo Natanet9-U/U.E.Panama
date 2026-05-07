@@ -319,3 +319,17 @@ class Usuarios(models.Model):
 	class Meta:
 		managed = False
 		db_table = 'usuarios'
+
+class Horarios(models.Model):
+	id = models.UUIDField(primary_key=True)
+	asignacion = models.ForeignKey(DocenteAsignacion, models.DO_NOTHING)
+	dia_semana = models.IntegerField()
+	hora_inicio = models.TimeField()
+	hora_fin = models.TimeField()
+	aula = models.TextField(blank=True, null=True)
+	created_at = models.DateTimeField(blank=True, null=True)
+
+	class Meta:
+		managed = False
+		db_table = 'horarios'
+		unique_together = (('asignacion', 'dia_semana', 'hora_inicio'),)
