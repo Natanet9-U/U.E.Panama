@@ -169,7 +169,7 @@ class DashboardService:
         for asistencia in Asistencias.objects.select_related("estudiante__usuario").order_by("-fecha")[:4]:
             estudiante = asistencia.estudiante
             nombre = f"{estudiante.nombres} {estudiante.primer_apellido}".strip()
-            timestamp = datetime.combine(asistencia.fecha, datetime.min.time())
+            timestamp = timezone.make_aware(datetime.combine(asistencia.fecha, datetime.min.time()))
             activities.append(
                 (
                     timestamp,
