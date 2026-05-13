@@ -61,7 +61,7 @@ function ClassCard({ clase }) {
       <p className="text-sm font-bold">{clase.asignatura}</p>
       <p className="mt-1 flex items-center gap-1 text-xs">
         <span>⏰</span>
-        {clase.hora_fin ? `${clase.hora_fin} - ${clase.hora_fin}` : clase.hora_fin}
+        {clase.hora_inicio && clase.hora_fin ? `${clase.hora_inicio} - ${clase.hora_fin}` : clase.hora_fin || clase.hora_inicio}
       </p>
       <p className="mt-1 flex items-center gap-1 text-xs">
         <span>📍</span>
@@ -145,24 +145,10 @@ function HorariosPage() {
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <p className="text-sm font-semibold uppercase tracking-[0.35em] text-slate-400">U.E.Panama</p>
-            <h1 className="mt-2 text-4xl font-black tracking-tight text-slate-950">Horarios</h1>
+            <h1 className="mt-2 text-4xl font-black tracking-tight text-slate-950">Horarios por clase</h1>
             <p className="mt-2 max-w-2xl text-base text-slate-600">
-              Visualiza y organiza tu calendario académico
+              Consulta los horarios según las clases y cursos asignados. Docentes ven sus cursos; dirección y secretaría ven todos los horarios.
             </p>
-          </div>
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-            <button
-              type="button"
-              className="rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-            >
-              ⬇️ Exportar
-            </button>
-            <button
-              type="button"
-              className="rounded-2xl bg-slate-950 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-slate-200 transition hover:bg-slate-800"
-            >
-              ➕ Nueva Clase
-            </button>
           </div>
         </div>
       </header>

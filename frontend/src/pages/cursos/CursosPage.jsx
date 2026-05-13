@@ -68,9 +68,9 @@ function CourseCard({ curso }) {
         </div>
 
         <div className="mt-5 flex gap-3">
-          <button type="button" className="flex-1 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-900 transition hover:bg-slate-50">
+          <a href={`/cursos/detalle?asignacion_id=${curso.id}`} className="flex-1 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-900 transition hover:bg-slate-50 text-center">
             Ver
-          </button>
+          </a>
           <button type="button" className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-900 transition hover:bg-slate-50">
             ⋮
           </button>
@@ -87,9 +87,21 @@ function CursosPage() {
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
   const [showCreateForm, setShowCreateForm] = useState(false);
-  const [formData, setFormData] = useState({ area_id: "", grado_id: "", docente_id: "" });
+  const [formData, setFormData] = useState({
+    area_name: "",
+    area_id: "",
+    grado_id: "",
+    grado_nivel: "",
+    grado_numero: "",
+    grado_paralelo: "",
+    grado_gestion: 2026,
+    docente_id: "",
+    horarios: [{ dia_semana: 0, hora_inicio: "08:00", hora_fin: "09:00", aula: "" }],
+  });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [useNewArea, setUseNewArea] = useState(false);
+  const [useNewGrado, setUseNewGrado] = useState(false);
 
   const resumen = data?.resumen || EMPTY_ARRAY;
   const cursos = data?.cursos || EMPTY_ARRAY;
@@ -149,15 +161,64 @@ function CursosPage() {
     setFormData((current) => ({ ...current, [name]: value }));
   };
 
+  const handleHorarioChange = (index, field, value) => {
+    const newHorarios = [...formData.horarios];
+    newHorarios[index] = { ...newHorarios[index], [field]: value };
+    setFormData((current) => ({ ...current, horarios: newHorarios }));
+  };
+
+  const addHorario = () => {
+    setFormData((current) => ({
+      ...current,
+      horarios: [...current.horarios, { dia_semana: 0, hora_inicio: "08:00", hora_fin: "09:00", aula: "" }],
+    }));
+  };
+
+  const removeHorario = (index) => {
+    setFormData((current) => ({
+      ...current,
+      horarios: current.horarios.filter((_, i) => i !== index),
+    }));
+  };
+
   const handleCreateCourse = async (event) => {
     event.preventDefault();
     setSaving(true);
     setSaveError("");
 
     try {
-      await createCourse(formData);
+      const payload = {
+        docente_id: formData.docente_id,
+        area_name: useNewArea ? formData.area_name : undefined,
+        area_id: !useNewArea ? formData.area_id : undefined,
+        grado_id: !useNewGrado ? formData.grado_id : undefined,
+        grado_nivel: useNewGrado ? formData.grado_nivel : undefined,
+        grado_numero: useNewGrado ? parseInt(formData.grado_numero) : undefined,
+        grado_paralelo: useNewGrado ? formData.grado_paralelo : undefined,
+        grado_gestion: useNewGrado ? parseInt(formData.grado_gestion) : undefined,
+        horarios: formData.horarios.map((h) => ({
+          dia_semana: parseInt(h.dia_semana),
+          hora_inicio: h.hora_inicio,
+          hora_fin: h.hora_fin,
+          aula: h.aula,
+        })),
+      };
+
+      await createCourse(payload);
       setShowCreateForm(false);
-      setFormData({ area_id: "", grado_id: "", docente_id: "" });
+      setFormData({
+        area_name: "",
+        area_id: "",
+        grado_id: "",
+        grado_nivel: "",
+        grado_numero: "",
+        grado_paralelo: "",
+        grado_gestion: 2026,
+        docente_id: "",
+        horarios: [{ dia_semana: 0, hora_inicio: "08:00", hora_fin: "09:00", aula: "" }],
+      });
+      setUseNewArea(false);
+      setUseNewGrado(false);
       setPage(1);
       getCoursesPage({ query, page: 1, pageSize: 6 }).then((response) => setData(response));
     } catch (requestError) {
@@ -195,33 +256,223 @@ function CursosPage() {
       {showCreateForm && permisos.puede_crear ? (
         <section className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-[0_18px_50px_rgba(15,23,42,0.05)]">
           <h2 className="text-xl font-black text-slate-950">Crear Curso</h2>
-          <form onSubmit={handleCreateCourse} className="mt-5 grid gap-4 md:grid-cols-3">
-            <label className="flex flex-col gap-2 text-sm font-semibold text-slate-700">
-              Asignatura
-              <select name="area_id" value={formData.area_id} onChange={handleFieldChange} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none">
-                <option value="">Selecciona un área</option>
-                {catalogos.areas.map((area) => <option key={area.id} value={area.id}>{area.nombre}</option>)}
-              </select>
-            </label>
-            <label className="flex flex-col gap-2 text-sm font-semibold text-slate-700">
-              Grado
-              <select name="grado_id" value={formData.grado_id} onChange={handleFieldChange} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none">
-                <option value="">Selecciona un grado</option>
-                {catalogos.grados.map((grado) => <option key={grado.id} value={grado.id}>{grado.nombre}</option>)}
-              </select>
-            </label>
-            <label className="flex flex-col gap-2 text-sm font-semibold text-slate-700">
-              Docente
-              <select name="docente_id" value={formData.docente_id} onChange={handleFieldChange} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none">
+          <form onSubmit={handleCreateCourse} className="mt-5 space-y-6">
+            {/* Asignatura */}
+            <div>
+              <div className="mb-3 flex items-center gap-4">
+                <label className="text-sm font-semibold text-slate-700">
+                  <input
+                    type="radio"
+                    checked={!useNewArea}
+                    onChange={() => setUseNewArea(false)}
+                    className="mr-2"
+                  />
+                  Seleccionar asignatura existente
+                </label>
+                <label className="text-sm font-semibold text-slate-700">
+                  <input
+                    type="radio"
+                    checked={useNewArea}
+                    onChange={() => setUseNewArea(true)}
+                    className="mr-2"
+                  />
+                  Crear nueva asignatura
+                </label>
+              </div>
+              {!useNewArea ? (
+                <select
+                  name="area_id"
+                  value={formData.area_id}
+                  onChange={handleFieldChange}
+                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none"
+                >
+                  <option value="">Selecciona un área</option>
+                  {catalogos.areas.map((area) => (
+                    <option key={area.id} value={area.id}>
+                      {area.nombre}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  name="area_name"
+                  placeholder="Ej: Matemática, Inglés, Artes..."
+                  value={formData.area_name}
+                  onChange={handleFieldChange}
+                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none"
+                />
+              )}
+            </div>
+
+            {/* Grado */}
+            <div>
+              <div className="mb-3 flex items-center gap-4">
+                <label className="text-sm font-semibold text-slate-700">
+                  <input
+                    type="radio"
+                    checked={!useNewGrado}
+                    onChange={() => setUseNewGrado(false)}
+                    className="mr-2"
+                  />
+                  Seleccionar grado existente
+                </label>
+                <label className="text-sm font-semibold text-slate-700">
+                  <input
+                    type="radio"
+                    checked={useNewGrado}
+                    onChange={() => setUseNewGrado(true)}
+                    className="mr-2"
+                  />
+                  Crear nuevo grado
+                </label>
+              </div>
+              {!useNewGrado ? (
+                <select
+                  name="grado_id"
+                  value={formData.grado_id}
+                  onChange={handleFieldChange}
+                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none"
+                >
+                  <option value="">Selecciona un grado</option>
+                  {catalogos.grados.map((grado) => (
+                    <option key={grado.id} value={grado.id}>
+                      {grado.nombre}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className="grid gap-3 md:grid-cols-4">
+                  <input
+                    type="text"
+                    name="grado_nivel"
+                    placeholder="Nivel (Primaria/Secundaria)"
+                    value={formData.grado_nivel}
+                    onChange={handleFieldChange}
+                    className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none"
+                  />
+                  <input
+                    type="number"
+                    name="grado_numero"
+                    placeholder="Número (1-6)"
+                    value={formData.grado_numero}
+                    onChange={handleFieldChange}
+                    className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none"
+                    min="1"
+                    max="12"
+                  />
+                  <input
+                    type="text"
+                    name="grado_paralelo"
+                    placeholder="Paralelo (A, B, C...)"
+                    maxLength="1"
+                    value={formData.grado_paralelo}
+                    onChange={handleFieldChange}
+                    className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none"
+                  />
+                  <input
+                    type="number"
+                    name="grado_gestion"
+                    placeholder="Año"
+                    value={formData.grado_gestion}
+                    onChange={handleFieldChange}
+                    className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none"
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* Docente */}
+            <div>
+              <label className="block text-sm font-semibold text-slate-700 mb-2">Docente</label>
+              <select
+                name="docente_id"
+                value={formData.docente_id}
+                onChange={handleFieldChange}
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none"
+              >
                 <option value="">Selecciona un docente</option>
-                {catalogos.docentes.map((docente) => <option key={docente.id} value={docente.id}>{docente.nombre}</option>)}
+                {catalogos.docentes.map((docente) => (
+                  <option key={docente.id} value={docente.id}>
+                    {docente.nombre}
+                  </option>
+                ))}
               </select>
-            </label>
-            <div className="md:col-span-3 flex gap-3">
-              <button type="submit" disabled={saving} className="rounded-2xl bg-slate-950 px-5 py-3 text-sm font-bold text-white disabled:opacity-50">
+            </div>
+
+            {/* Horarios */}
+            <div>
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-slate-700">Horarios (opcional)</h3>
+                <button
+                  type="button"
+                  onClick={addHorario}
+                  className="text-xs font-bold text-blue-600 hover:underline"
+                >
+                  + Agregar horario
+                </button>
+              </div>
+              <div className="space-y-3">
+                {formData.horarios.map((horario, index) => (
+                  <div key={index} className="flex gap-3 items-end rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <select
+                      value={horario.dia_semana}
+                      onChange={(e) => handleHorarioChange(index, "dia_semana", e.target.value)}
+                      className="flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
+                    >
+                      <option value="0">Lunes</option>
+                      <option value="1">Martes</option>
+                      <option value="2">Miércoles</option>
+                      <option value="3">Jueves</option>
+                      <option value="4">Viernes</option>
+                    </select>
+                    <input
+                      type="time"
+                      value={horario.hora_inicio}
+                      onChange={(e) => handleHorarioChange(index, "hora_inicio", e.target.value)}
+                      className="flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
+                    />
+                    <input
+                      type="time"
+                      value={horario.hora_fin}
+                      onChange={(e) => handleHorarioChange(index, "hora_fin", e.target.value)}
+                      className="flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Aula"
+                      value={horario.aula}
+                      onChange={(e) => handleHorarioChange(index, "aula", e.target.value)}
+                      className="flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none"
+                    />
+                    {formData.horarios.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removeHorario(index)}
+                        className="rounded-lg bg-red-100 px-3 py-2 text-sm font-bold text-red-700 hover:bg-red-200"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Botones */}
+            <div className="flex gap-3 border-t border-slate-100 pt-5">
+              <button
+                type="submit"
+                disabled={saving}
+                className="rounded-2xl bg-slate-950 px-5 py-3 text-sm font-bold text-white disabled:opacity-50"
+              >
                 {saving ? "Guardando..." : "Crear curso"}
               </button>
-              <button type="button" onClick={() => setShowCreateForm(false)} className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-bold text-slate-900">
+              <button
+                type="button"
+                onClick={() => setShowCreateForm(false)}
+                className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-bold text-slate-900"
+              >
                 Cancelar
               </button>
             </div>

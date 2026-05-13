@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { createStudent, getStudentsPage } from "../../services/studentsService";
+import { getStudentsPage } from "../../services/studentsService";
 
 const EMPTY_ARRAY = [];
 
@@ -86,25 +86,9 @@ function EstudiantesPage() {
   const [query, setQuery] = useState("");
   const [gradoId, setGradoId] = useState("");
   const [page, setPage] = useState(1);
-  const [showCreateForm, setShowCreateForm] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState("");
-  const [formData, setFormData] = useState({
-    nombres: "",
-    primer_apellido: "",
-    segundo_apellido: "",
-    email: "",
-    ci: "",
-    telefono: "",
-    grado_id: "",
-    genero: "",
-    estado: "Activo",
-  });
-
   const resumen = data?.resumen || EMPTY_ARRAY;
   const estudiantes = data?.estudiantes || EMPTY_ARRAY;
   const grados = data?.filtros?.grados || EMPTY_ARRAY;
-  const permisos = data?.permisos || { puede_crear: false };
   const paginacion = data?.paginacion || { pagina: 1, paginas: 1, anterior: false, siguiente: false, total: 0 };
 
   const controls = useMemo(
@@ -125,9 +109,6 @@ function EstudiantesPage() {
 
           setData(response);
           setError("");
-          if (!response?.permisos?.puede_crear) {
-            setShowCreateForm(false);
-          }
         })
         .catch((requestError) => {
           if (!mounted) {
@@ -159,39 +140,6 @@ function EstudiantesPage() {
     setPage(1);
   };
 
-  const handleFormChange = (event) => {
-    const { name, value } = event.target;
-    setFormData((current) => ({ ...current, [name]: value }));
-  };
-
-  const handleCreateStudent = async (event) => {
-    event.preventDefault();
-    setSaving(true);
-    setSaveError("");
-
-    try {
-      await createStudent(formData);
-      setShowCreateForm(false);
-      setFormData({
-        nombres: "",
-        primer_apellido: "",
-        segundo_apellido: "",
-        email: "",
-        ci: "",
-        telefono: "",
-        grado_id: "",
-        genero: "",
-        estado: "Activo",
-      });
-      setPage(1);
-      getStudentsPage({ query, gradoId, page: 1, pageSize: 8 }).then((response) => setData(response));
-    } catch (requestError) {
-      setSaveError(requestError?.response?.data?.error || "No fue posible crear el estudiante");
-    } finally {
-      setSaving(false);
-    }
-  };
-
   return (
     <section className="space-y-6">
       <header className="rounded-[2rem] border border-slate-200 bg-[linear-gradient(135deg,rgba(14,165,233,0.08),rgba(255,255,255,0.94),rgba(99,102,241,0.05))] p-8 shadow-[0_18px_70px_rgba(15,23,42,0.05)]">
@@ -206,83 +154,11 @@ function EstudiantesPage() {
             <button type="button" className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-bold text-slate-900 shadow-sm transition hover:bg-slate-50">
               Exportar
             </button>
-            {permisos.puede_crear ? (
-              <button
-                type="button"
-                onClick={() => setShowCreateForm((current) => !current)}
-                className="rounded-2xl bg-slate-950 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-slate-300 transition hover:bg-slate-800"
-              >
-                Nuevo Estudiante
-              </button>
-            ) : null}
           </div>
         </div>
       </header>
 
       {error ? <div className="rounded-3xl border border-red-200 bg-red-50 px-5 py-4 text-sm font-medium text-red-700">{error}</div> : null}
-      {saveError ? <div className="rounded-3xl border border-red-200 bg-red-50 px-5 py-4 text-sm font-medium text-red-700">{saveError}</div> : null}
-
-      {showCreateForm && permisos.puede_crear ? (
-        <section className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-[0_18px_50px_rgba(15,23,42,0.05)]">
-          <h2 className="text-xl font-black text-slate-950">Crear Estudiante</h2>
-          <form onSubmit={handleCreateStudent} className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            <label className="flex flex-col gap-2 text-sm font-semibold text-slate-700">
-              Nombres
-              <input name="nombres" value={formData.nombres} onChange={handleFormChange} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none" />
-            </label>
-            <label className="flex flex-col gap-2 text-sm font-semibold text-slate-700">
-              Primer apellido
-              <input name="primer_apellido" value={formData.primer_apellido} onChange={handleFormChange} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none" />
-            </label>
-            <label className="flex flex-col gap-2 text-sm font-semibold text-slate-700">
-              Segundo apellido
-              <input name="segundo_apellido" value={formData.segundo_apellido} onChange={handleFormChange} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none" />
-            </label>
-            <label className="flex flex-col gap-2 text-sm font-semibold text-slate-700">
-              Email
-              <input name="email" type="email" value={formData.email} onChange={handleFormChange} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none" />
-            </label>
-            <label className="flex flex-col gap-2 text-sm font-semibold text-slate-700">
-              CI
-              <input name="ci" value={formData.ci} onChange={handleFormChange} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none" />
-            </label>
-            <label className="flex flex-col gap-2 text-sm font-semibold text-slate-700">
-              Teléfono
-              <input name="telefono" value={formData.telefono} onChange={handleFormChange} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none" />
-            </label>
-            <label className="flex flex-col gap-2 text-sm font-semibold text-slate-700">
-              Grado
-              <select name="grado_id" value={formData.grado_id} onChange={handleFormChange} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none">
-                <option value="">Selecciona un grado</option>
-                {grados.map((grado) => <option key={grado.id} value={grado.id}>{grado.nombre}</option>)}
-              </select>
-            </label>
-            <label className="flex flex-col gap-2 text-sm font-semibold text-slate-700">
-              Género
-              <select name="genero" value={formData.genero} onChange={handleFormChange} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none">
-                <option value="">Sin definir</option>
-                <option value="M">Masculino</option>
-                <option value="F">Femenino</option>
-              </select>
-            </label>
-            <label className="flex flex-col gap-2 text-sm font-semibold text-slate-700">
-              Estado
-              <select name="estado" value={formData.estado} onChange={handleFormChange} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none">
-                <option value="Activo">Activo</option>
-                <option value="Inactivo">Inactivo</option>
-              </select>
-            </label>
-            <div className="md:col-span-2 xl:col-span-3 flex gap-3">
-              <button type="submit" disabled={saving} className="rounded-2xl bg-slate-950 px-5 py-3 text-sm font-bold text-white disabled:opacity-50">
-                {saving ? "Guardando..." : "Crear estudiante"}
-              </button>
-              <button type="button" onClick={() => setShowCreateForm(false)} className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-bold text-slate-900">
-                Cancelar
-              </button>
-            </div>
-          </form>
-        </section>
-      ) : null}
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {resumen.map((item) => (

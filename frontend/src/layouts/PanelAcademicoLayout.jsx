@@ -1,9 +1,12 @@
-import { NavLink, Outlet } from "react-router-dom";
-import { getStoredUser } from "../services/authService";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { useState } from "react";
+import { getStoredUser, logoutRequest } from "../services/authService";
 
 const menu = [
   { to: "/dashboard", label: "Dashboard", icon: "home" },
   { to: "/estudiantes", label: "Estudiantes", icon: "users" },
+  { to: "/docentes", label: "Docentes", icon: "users", rolesVisibles: ["director", "secretaria"] },
+  { to: "/inscripcion", label: "Inscripción", icon: "users", rolesVisibles: ["director", "secretaria"] },
   { to: "/cursos", label: "Cursos", icon: "book" },
   { to: "/reportes", label: "Reportes", icon: "report" },
   { to: "/horarios", label: "Horarios", icon: "calendar" },
@@ -56,6 +59,13 @@ function Icon({ name, className = "w-5 h-5" }) {
           <path d="M12 2l3 6 6 .5-4.5 3.5L19 20l-7-4-7 4 1.5-7L2 8.5 8 8 12 2z" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       );
+    case "settings":
+      return (
+        <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 15.5A3.5 3.5 0 1112 8.5a3.5 3.5 0 010 7z" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 005 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 5c.4-.24.84-.39 1.31-.44V3a2 2 0 014 0v.09c.47.05.91.2 1.31.44a1.65 1.65 0 001.82.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019 9c.24.4.39.84.44 1.31H21a2 2 0 010 4h-.09c-.05.47-.2.91-.44 1.31z" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
     default:
       return null;
   }
@@ -63,6 +73,10 @@ function Icon({ name, className = "w-5 h-5" }) {
 
 function PanelAcademicoLayout() {
   const usuario = getStoredUser();
+  const roleRaw = usuario?.cargo || usuario?.rol || (Array.isArray(usuario?.roles) ? usuario.roles[0] : "") || "docente";
+  const roleLabel = roleRaw ? `${roleRaw}`.charAt(0).toUpperCase() + `${roleRaw}`.slice(1) : "Docente";
+  const navigate = useNavigate();
+  const [showSettings, setShowSettings] = useState(false);
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -83,7 +97,11 @@ function PanelAcademicoLayout() {
               </div>
 
               <nav className="flex flex-col gap-2">
-                {menu.map((item) => (
+                {menu.filter((item) => {
+                  if (!item.rolesVisibles) return true;
+                  const userRole = (usuario?.cargo || usuario?.rol || "").toLowerCase();
+                  return item.rolesVisibles.includes(userRole);
+                }).map((item) => (
                   <NavLink
                     key={item.to}
                     to={item.to}
@@ -106,7 +124,7 @@ function PanelAcademicoLayout() {
               <img src="/assets/login/avatar.png" alt="avatar" className="h-10 w-10 rounded-full object-cover" />
               <div>
                 <div className="text-sm font-semibold text-slate-900">{usuario ? `${usuario.nombre} ${usuario.apellido}` : "María Álvarez"}</div>
-                <div className="text-xs text-slate-400">Docente</div>
+                <div className="text-xs text-slate-400">{roleLabel}</div>
               </div>
             </div>
           </div>
@@ -129,12 +147,21 @@ function PanelAcademicoLayout() {
                   <path d="M13.73 21a2 2 0 01-3.46 0" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
               </button>
-              <button title="Ajustes" className="rounded-full p-2 text-slate-600 hover:bg-slate-100">
-                <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M12 15.5A3.5 3.5 0 1112 8.5a3.5 3.5 0 010 7z" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-                  <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 005 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 5c.4-.24.84-.39 1.31-.44V3a2 2 0 014 0v.09c.47.05.91.2 1.31.44a1.65 1.65 0 001.82.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019 9c.24.4.39.84.44 1.31H21a2 2 0 010 4h-.09c-.05.47-.2.91-.44 1.31z" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </button>
+              <div className="relative">
+                <button title="Ajustes" onClick={() => setShowSettings(!showSettings)} className="rounded-full p-2 text-slate-600 hover:bg-slate-100">
+                  <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 15.5A3.5 3.5 0 1112 8.5a3.5 3.5 0 010 7z" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 005 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 5c.4-.24.84-.39 1.31-.44V3a2 2 0 014 0v.09c.47.05.91.2 1.31.44a1.65 1.65 0 001.82.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019 9c.24.4.39.84.44 1.31H21a2 2 0 010 4h-.09c-.05.47-.2.91-.44 1.31z" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+
+                {showSettings ? (
+                  <div className="absolute right-0 mt-2 w-48 rounded-md bg-white shadow-lg border">
+                    <button onClick={() => { setShowSettings(false); navigate('/change-password'); }} className="block w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50">Cambiar contraseña</button>
+                    <button onClick={async () => { setShowSettings(false); await logoutRequest(); navigate('/login'); }} className="block w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50">Cerrar sesión</button>
+                  </div>
+                ) : null}
+              </div>
 
               <div className="flex items-center gap-3">
                 <img src="/assets/login/avatar.png" alt="avatar" className="h-9 w-9 rounded-full object-cover" />

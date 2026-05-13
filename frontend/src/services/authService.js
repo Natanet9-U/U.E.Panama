@@ -13,6 +13,14 @@ export async function loginRequest(email, password) {
   return usuario;
 }
 
+export async function changePasswordRequest(currentPassword, newPassword) {
+  const response = await apiClient.post("/auth/change-password/", {
+    current_password: currentPassword,
+    new_password: newPassword,
+  });
+  return response.data;
+}
+
 export async function getCurrentUser() {
   const response = await apiClient.get("/auth/me/");
   return response.data.usuario;
@@ -42,4 +50,13 @@ export function isAuthenticated() {
 export function logout() {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+}
+
+export async function logoutRequest() {
+  try {
+    await apiClient.post("/auth/logout/");
+  } catch (_err) {
+    // ignore server errors and continue cleaning client state
+  }
+  logout();
 }
