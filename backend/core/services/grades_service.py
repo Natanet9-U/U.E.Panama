@@ -261,3 +261,218 @@ class GradesService:
     def _build_periods(self):
         periods = Periodos.objects.order_by("-gestion", "-numero")
         return [{"id": str(period.id), "nombre": f"{period.nombre} {period.gestion}"} for period in periods]
+
+    def update_student_grades(self, usuario, asignacion_id, periodo_id, payload):
+        """
+        payload: list of { estudiante_id, detalles: [ { dimension_id, valor } ], indicador?, observaciones? }
+        Only teachers assigned to the assignment or direct roles can update.
+        Calculates Nota.total as the average percentage across dimensiones (valor / puntaje_maximo * 100).
+        """
+        if not self.access_service.can_view_all_academic_data(usuario):
+            # ensure teacher is owner of assignment
+            assigned_ids = self.access_service.get_assigned_assignment_ids(usuario)
+            if asignacion_id not in assigned_ids:
+                raise PermissionError("No tienes permisos para modificar notas en esta asignación")
+
+        # lazy import models
+        from ..models import Notas, NotaDetalle, DimensionesEvaluacion
+        updated = []
+        dimensiones_map = {d.id: d for d in DimensionesEvaluacion.objects.all()}
+
+        for item in payload or []:
+            estudiante_id = item.get("estudiante_id")
+            detalles = item.get("detalles") or []
+            indicador = item.get("indicador")
+            observaciones = item.get("observaciones")
+
+            nota_obj, created = Notas.objects.get_or_create(
+                estudiante_id=estudiante_id,
+                asignacion_id=asignacion_id,
+                periodo_id=periodo_id,
+                defaults={"id": None},
+            )
+
+            # ensure id if None
+            if nota_obj.id is None:
+                from uuid import uuid4
+                nota_obj.id = uuid4()
+
+            # save/replace detalle values
+            total_percentages = []
+            for det in detalles:
+                dim_id = det.get("dimension_id")
+                valor = det.get("valor")
+                if dim_id is None or valor is None:
+                    continue
+
+                dim = dimensiones_map.get(dim_id)
+                if dim is None:
+                    try:
+                        dim = DimensionesEvaluacion.objects.get(id=dim_id)
+                        dimensiones_map[dim.id] = dim
+                    except DimensionesEvaluacion.DoesNotExist:
+                        continue
+
+                nd, _ = NotaDetalle.objects.update_or_create(
+                    nota=nota_obj,
+                    dimension=dim,
+                    defaults={"valor": int(valor)},
+                )
+
+                try:
+                    pct = (int(valor) / float(dim.puntaje_maximo)) * 100 if dim.puntaje_maximo else 0
+                except Exception:
+                    pct = 0
+
+                total_percentages.append(pct)
+
+            # compute nota total as average of dimension percentages
+            if total_percentages:
+                nota_total = int(round(sum(total_percentages) / len(total_percentages)))
+            else:
+                nota_total = None
+
+            nota_obj.total = nota_total
+            nota_obj.indicador = indicador or nota_obj.indicador
+            nota_obj.observaciones = observaciones or nota_obj.observaciones
+            from django.utils import timezone
+            nota_obj.updated_at = timezone.now()
+            nota_obj.save()
+
+            updated.append({"estudiante_id": str(estudiante_id), "nota_total": nota_total})
+
+        return updated
+
+    def compute_trimestral_and_overall(self, asignacion_id):
+        """
+        For an assignment, compute per-student totals per periodo (trimestre), per-dimension percentages per periodo,
+        and overall final as average of available period totals.
+        Returns list of { estudiante_id, por_periodo: {numero: total}, dimensiones: {numero: {dimension_id: promedio_pct}}, final }
+        """
+        from ..models import Notas, NotaDetalle, Periodos
+
+        # collect period numbers for this gestion
+        periodos = list(Periodos.objects.order_by('numero'))
+        periodo_map = {str(p.id): p for p in periodos}
+
+        notas_qs = Notas.objects.filter(asignacion_id=asignacion_id).select_related('estudiante', 'periodo')
+        students = {}
+
+        for nota in notas_qs:
+            est_id = str(nota.estudiante_id)
+            student = students.setdefault(est_id, {"nombre": f"{nota.estudiante.nombres} {nota.estudiante.primer_apellido}", "por_periodo": {}, "dimensiones": {}})
+            periodo_num = nota.periodo.numero if hasattr(nota, 'periodo') and nota.periodo else None
+            if periodo_num is not None:
+                student["por_periodo"][periodo_num] = nota.total
+
+            # accumulate dimensiones for this nota
+            for nd in NotaDetalle.objects.filter(nota=nota).select_related('dimension'):
+                num = nota.periodo.numero if nota.periodo else None
+                if num is None:
+                    continue
+                dim_map = student["dimensiones"].setdefault(num, {})
+                lst = dim_map.setdefault(str(nd.dimension_id), [])
+                try:
+                    pct = (nd.valor / float(nd.dimension.puntaje_maximo)) * 100 if nd.dimension.puntaje_maximo else 0
+                except Exception:
+                    pct = 0
+                lst.append(pct)
+
+        results = []
+        for est_id, info in students.items():
+            por_periodo = info.get("por_periodo", {})
+            dimensiones_out = {}
+            for periodo_num, dims in info.get("dimensiones", {}).items():
+                dimensiones_out[periodo_num] = {dim_id: int(round(sum(vals) / len(vals))) if vals else None for dim_id, vals in dims.items()}
+
+            # compute overall final as average of available period totals
+            totals = [v for v in por_periodo.values() if v is not None]
+            final = int(round(sum(totals) / len(totals))) if totals else None
+
+            results.append({"estudiante_id": est_id, "nombre": info.get("nombre"), "por_periodo": por_periodo, "dimensiones": dimensiones_out, "final": final})
+
+        return results
+
+    def get_activities_average(self, asignacion_id):
+        """
+        For an assignment, calculate average grade per student from ActividadNota records.
+        Returns dict: { estudiante_id: average_score (0-100 scale) }
+        """
+        from ..models import ActividadNotas, Actividades
+
+        activities_avg = {}
+        estudiantes_notas = {}
+
+        # collect all activity grades for this assignment
+        actividades = Actividades.objects.filter(asignacion_id=asignacion_id)
+        for actividad in actividades:
+            notas = ActividadNotas.objects.filter(actividad=actividad)
+            for nota in notas:
+                est_id = str(nota.estudiante_id)
+                # normalize nota to 100-scale based on actividad.puntaje_maximo
+                normalized = (nota.valor / float(actividad.puntaje_maximo)) * 100 if actividad.puntaje_maximo else 0
+                if est_id not in estudiantes_notas:
+                    estudiantes_notas[est_id] = []
+                estudiantes_notas[est_id].append(normalized)
+
+        # compute average per student
+        for est_id, notas_list in estudiantes_notas.items():
+            if notas_list:
+                activities_avg[est_id] = int(round(sum(notas_list) / len(notas_list)))
+            else:
+                activities_avg[est_id] = 0
+
+        return activities_avg
+
+    def recompute_from_actividades(self, usuario, asignacion_id, periodo_id):
+        """
+        Recomputes Notas and NotaDetalle for a given assignment and periodo based on Actividades and ActividadNotas.
+        Activities that have `dimension` are aggregated per-dimension; activities without a dimension contribute as a general component.
+        The final Nota.total is the average of all dimension percentages plus the general percentage (if present).
+        """
+        if not self.access_service.can_view_all_academic_data(usuario):
+            assigned_ids = self.access_service.get_assigned_assignment_ids(usuario)
+            if asignacion_id not in assigned_ids:
+                raise PermissionError("No tienes permisos para recomputar notas en esta asignación")
+
+        from ..models import Actividades, ActividadNotas, Notas, NotaDetalle, DimensionesEvaluacion, Estudiantes, DocenteAsignacion
+        from uuid import uuid4
+        from django.utils import timezone
+
+        # determine students in the assignment's grado
+        grado_id = DocenteAsignacion.objects.filter(id=asignacion_id).values_list('grado_id', flat=True).first()
+        if not grado_id:
+            raise ValueError("Asignacion no encontrada")
+
+        estudiantes = Estudiantes.objects.filter(grado_id=grado_id)
+        updated = []
+
+        # All activities contribute only to Nota.total (do not modify NotaDetalle)
+        for s in estudiantes:
+            an_qs = ActividadNotas.objects.filter(actividad__asignacion_id=asignacion_id, estudiante_id=s.id).select_related('actividad')
+            total_val = 0
+            total_max = 0
+            for an in an_qs:
+                act = an.actividad
+                total_val += int(an.valor or 0)
+                total_max += int(act.puntaje_maximo or 0) if act else 0
+
+            if total_max:
+                nota_total = int(round((total_val / float(total_max)) * 100))
+            else:
+                nota_total = None
+
+            nota_obj, created = Notas.objects.get_or_create(
+                estudiante_id=s.id,
+                asignacion_id=asignacion_id,
+                periodo_id=periodo_id,
+                defaults={"id": uuid4(), "created_at": timezone.now()},
+            )
+
+            nota_obj.total = nota_total
+            nota_obj.updated_at = timezone.now()
+            nota_obj.save()
+
+            updated.append({"estudiante_id": str(s.id), "nota_total": nota_total})
+
+        return updated

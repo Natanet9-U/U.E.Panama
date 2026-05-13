@@ -188,6 +188,7 @@ class SchedulesService:
             "aula": schedule.aula or "N/A",
             "docente": schedule.asignacion.docente.usuario.nombre if schedule.asignacion else "N/A",
             "estudiantes": self._count_students(schedule.asignacion) if schedule.asignacion else 0,
+            "hora_inicio": schedule.hora_inicio.strftime("%H:%M") if schedule.hora_inicio else "N/A",
             "hora_fin": schedule.hora_fin.strftime("%H:%M") if schedule.hora_fin else "N/A",
         }
 

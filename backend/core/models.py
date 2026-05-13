@@ -134,6 +134,32 @@ class NotaDetalle(models.Model):
 		db_table = 'nota_detalle'
 		unique_together = (('nota', 'dimension'),)
 
+class Actividades(models.Model):
+	id = models.UUIDField(primary_key=True)
+	asignacion = models.ForeignKey(DocenteAsignacion, models.DO_NOTHING)
+	nombre = models.TextField()
+	dimension = models.ForeignKey(DimensionesEvaluacion, models.DO_NOTHING, blank=True, null=True)
+	puntaje_maximo = models.IntegerField(default=100)
+	fecha = models.DateField(blank=True, null=True)
+	orden = models.IntegerField(blank=True, null=True)
+	created_at = models.DateTimeField(blank=True, null=True)
+
+	class Meta:
+		managed = True
+		db_table = 'actividades'
+
+class ActividadNotas(models.Model):
+	id = models.UUIDField(primary_key=True)
+	actividad = models.ForeignKey(Actividades, models.DO_NOTHING)
+	estudiante = models.ForeignKey(Estudiantes, models.DO_NOTHING)
+	valor = models.IntegerField(default=0)
+	created_at = models.DateTimeField(blank=True, null=True)
+
+	class Meta:
+		managed = True
+		db_table = 'actividad_notas'
+		unique_together = (('actividad', 'estudiante'),)
+
 class Notas(models.Model):
 	id = models.UUIDField(primary_key=True)
 	estudiante = models.ForeignKey(Estudiantes, models.DO_NOTHING)

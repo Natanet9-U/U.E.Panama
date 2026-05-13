@@ -1,9 +1,10 @@
 from uuid import uuid4
+from datetime import time
 
 from django.db import transaction
 from django.db.models import Avg, Q
 
-from ..models import Areas, DocenteAsignacion, Docentes, Estudiantes, Notas, Periodos, Grados
+from ..models import Areas, DocenteAsignacion, Docentes, Estudiantes, Notas, Periodos, Grados, Horarios
 from .access_service import AccessControlService
 
 
@@ -56,23 +57,65 @@ class CoursesService:
         }
 
     def create_course(self, usuario, data):
+        """
+        Create a new course (DocenteAsignacion) with optional area/grade creation.
+        
+        Args:
+            usuario: Authenticated user
+            data: dict with:
+                - area_name: str (required, will create if not found)
+                - grado_nivel: str (required if creating grade)
+                - grado_numero: int (required if creating grade)
+                - grado_paralelo: str (required if creating grade)
+                - grado_gestion: int (required if creating grade)
+                - docente_id: str (required, must exist)
+                - horarios: list of {dia_semana, hora_inicio, hora_fin, aula} (optional)
+        
+        Returns:
+            dict with created course data
+        """
         if not self.access_service.can_create_academic_data(usuario):
             raise PermissionError("No tienes permisos para crear cursos")
 
-        area_id = data.get("area_id")
+        area_name = data.get("area_name", "").strip()
         grado_id = data.get("grado_id")
         docente_id = data.get("docente_id")
+        horarios_data = data.get("horarios", [])
 
-        if not area_id or not grado_id or not docente_id:
-            raise ValueError("Debes enviar area, grado y docente")
+        if not area_name or not docente_id:
+            raise ValueError("Debes enviar area_name y docente_id")
 
         try:
-            area = Areas.objects.get(id=area_id)
-            grado = Grados.objects.get(id=grado_id)
             docente = Docentes.objects.get(id=docente_id)
-        except (Areas.DoesNotExist, Grados.DoesNotExist, Docentes.DoesNotExist) as exc:
-            raise ValueError("Uno de los elementos seleccionados no existe") from exc
+        except Docentes.DoesNotExist as exc:
+            raise ValueError("El docente seleccionado no existe") from exc
 
+        # Get or create area
+        area, _ = Areas.objects.get_or_create(nombre=area_name)
+
+        # Get or create grade
+        if not grado_id:
+            grado_nivel = data.get("grado_nivel", "").strip()
+            grado_numero = data.get("grado_numero")
+            grado_paralelo = data.get("grado_paralelo", "").strip()
+            grado_gestion = data.get("grado_gestion", 2026)
+
+            if not grado_nivel or grado_numero is None or not grado_paralelo:
+                raise ValueError("Debes enviar grado_nivel, grado_numero y grado_paralelo para crear un grado")
+
+            grado, _ = Grados.objects.get_or_create(
+                nivel=grado_nivel,
+                numero=grado_numero,
+                paralelo=grado_paralelo,
+                gestion=grado_gestion,
+            )
+        else:
+            try:
+                grado = Grados.objects.get(id=grado_id)
+            except Grados.DoesNotExist as exc:
+                raise ValueError("El grado seleccionado no existe") from exc
+
+        # Check if assignment already exists
         if DocenteAsignacion.objects.filter(docente=docente, grado=grado, area=area).exists():
             raise ValueError("Ese curso ya existe")
 
@@ -84,8 +127,38 @@ class CoursesService:
                 area=area,
             )
 
+            # Create schedules if provided
+            if horarios_data:
+                self._create_schedules(asignacion, horarios_data)
+
         promedio = self._build_average_map([asignacion.id], self._get_periodo_activo()).get(str(asignacion.id), 0)
         return self._serialize_course(asignacion, promedio)
+
+    def _create_schedules(self, asignacion, horarios_data):
+        """Create schedule rows for a course assignment."""
+        for horario_data in horarios_data:
+            try:
+                dia_semana = int(horario_data.get("dia_semana"))
+                hora_inicio_str = horario_data.get("hora_inicio")
+                hora_fin_str = horario_data.get("hora_fin")
+                aula = horario_data.get("aula", "").strip()
+
+                # Parse time strings (expected format: "HH:MM")
+                hora_inicio = time.fromisoformat(hora_inicio_str) if isinstance(hora_inicio_str, str) else hora_inicio_str
+                hora_fin = time.fromisoformat(hora_fin_str) if isinstance(hora_fin_str, str) else hora_fin_str
+
+                Horarios.objects.get_or_create(
+                    asignacion=asignacion,
+                    dia_semana=dia_semana,
+                    hora_inicio=hora_inicio,
+                    defaults={
+                        "id": uuid4(),
+                        "hora_fin": hora_fin,
+                        "aula": aula,
+                    },
+                )
+            except (ValueError, TypeError) as exc:
+                raise ValueError(f"Datos de horario inválidos: {horario_data}") from exc
 
     def _build_summary(self, queryset, periodo_activo):
         total_cursos = queryset.count()

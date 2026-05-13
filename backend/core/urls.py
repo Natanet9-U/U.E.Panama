@@ -1,15 +1,29 @@
 from django.urls import path
-from .views import courses_view, dashboard_view, grades_view, health_view, login_view, logout_view, me_view, reports_view, schedules_view, students_view
+from .views import courses_view, dashboard_view, grades_view, health_view, login_view, logout_view, me_view, reports_view, schedules_view, students_view, docentes_view, attendance_view, licencias_view, change_password_view, grades_update_view, course_detail_view, actividades_view, actividades_notas_view, actividades_notas_estudiante_view, recompute_actividades_view, enrollment_search_view, enrollment_new_view, enrollment_re_enroll_view, enrollment_catalogs_view
 
 urlpatterns = [
     path('health/', health_view, name='health'),
     path('auth/login/', login_view, name='auth_login'),
     path('auth/me/', me_view, name='auth_me'),
     path('auth/logout/', logout_view, name='auth_logout'),
+    path('auth/change-password/', change_password_view, name='auth_change_password'),
     path('dashboard/', dashboard_view, name='dashboard'),
     path('students/', students_view, name='students'),
+    path('docentes/', docentes_view, name='docentes'),
+    path('enrollment/search/', enrollment_search_view, name='enrollment_search'),
+    path('enrollment/new/', enrollment_new_view, name='enrollment_new'),
+    path('enrollment/re-enroll/', enrollment_re_enroll_view, name='enrollment_re_enroll'),
+    path('enrollment/catalogs/', enrollment_catalogs_view, name='enrollment_catalogs'),
     path('courses/', courses_view, name='courses'),
+    path('attendance/', attendance_view, name='attendance'),
+    path('licencias/', licencias_view, name='licencias'),
     path('grades/', grades_view, name='grades'),
+    path('grades/update/', grades_update_view, name='grades_update'),
+    path('grades/recompute-actividades/', recompute_actividades_view, name='grades_recompute_actividades'),
+    path('courses/detail/', course_detail_view, name='course_detail'),
+    path('actividades/', actividades_view, name='actividades'),
+    path('actividades/notas/', actividades_notas_view, name='actividades_notas'),
+    path('actividades/notas-estudiante/', actividades_notas_estudiante_view, name='actividades_notas_estudiante'),
     path('reports/', reports_view, name='reports'),
     path('schedules/', schedules_view, name='schedules'),
     path('login/', login_view, name='login'),

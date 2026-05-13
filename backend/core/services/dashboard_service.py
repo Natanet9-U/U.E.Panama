@@ -1,26 +1,207 @@
 from datetime import datetime, timedelta
 from collections import Counter
 
-from django.db.models import Avg
+from django.core.cache import cache
+from django.db.models import Avg, Count, Q
 from django.utils import timezone
 
 from ..models import Asistencias, DocenteAsignacion, Estudiantes, Licencias, Notas, Periodos
+from .access_service import AccessControlService
 
 
 class DashboardService:
+    NEGATIVE_ATTENDANCE_STATES = {"falta", "ausente", "inasistencia"}
+
+    def __init__(self, access_service=None, cache_backend=None, cache_ttl_seconds=20):
+        self.access_service = access_service or AccessControlService()
+        self.cache_backend = cache_backend or cache
+        self.cache_ttl_seconds = cache_ttl_seconds
+
+    def warm_cache_for_user(self, usuario):
+        # Single-responsibility helper for preloading dashboard cache from login flow.
+        return self.build_dashboard(usuario)
+
     def build_dashboard(self, usuario):
+        roles = self.access_service.get_role_names(usuario)
         periodo_activo = self._get_periodo_activo()
+
+        if self.access_service.can_view_all_academic_data(usuario):
+            rol = "director" if "director" in roles else "secretaria"
+            cache_key = self._cache_key(usuario, rol, periodo_activo)
+            cached = self.cache_backend.get(cache_key)
+            if cached is not None:
+                return cached
+
+            payload = {
+                "rol": rol,
+                "resumen": self._build_summary(periodo_activo),
+                "asistencia_semanal": self._build_weekly_attendance(),
+                "promedio_por_asignatura": self._build_subject_averages(periodo_activo),
+                "rendimiento": self._build_performance_distribution(periodo_activo),
+                "proximas_clases": self._build_upcoming_classes(None),
+                "actividad_reciente": self._build_recent_activity(),
+                "tareas_pendientes": self._build_pending_tasks(periodo_activo),
+                "estudiantes_destacados": self._build_highlight_students(periodo_activo),
+                "periodo_activo": self._format_period(periodo_activo),
+            }
+            self.cache_backend.set(cache_key, payload, self.cache_ttl_seconds)
+            return payload
+
+        if "docente" in roles:
+            rol = "docente"
+            assignment_ids = self.access_service.get_assigned_assignment_ids(usuario)
+            cache_key = self._cache_key(usuario, rol, periodo_activo)
+            cached = self.cache_backend.get(cache_key)
+            if cached is not None:
+                return cached
+
+            payload = {
+                "rol": rol,
+                "resumen": self._build_summary_for_docente(usuario, periodo_activo),
+                "asistencia_semanal": self._build_weekly_attendance_for_docente(usuario),
+                "promedio_por_asignatura": self._build_subject_averages(periodo_activo, assignment_ids=assignment_ids),
+                "proximas_clases": self._build_upcoming_classes(usuario),
+                "actividad_reciente": self._build_recent_activity_for_docente(usuario),
+                "periodo_activo": self._format_period(periodo_activo),
+            }
+            self.cache_backend.set(cache_key, payload, self.cache_ttl_seconds)
+            return payload
+
+        if "estudiante" in roles:
+            rol = "estudiante"
+            cache_key = self._cache_key(usuario, rol, periodo_activo)
+            cached = self.cache_backend.get(cache_key)
+            if cached is not None:
+                return cached
+
+            payload = {
+                "rol": rol,
+                "resumen": self._build_dashboard_for_student(usuario, periodo_activo),
+                "actividad_reciente": self._build_recent_activity_for_student(usuario),
+                "periodo_activo": self._format_period(periodo_activo),
+            }
+            self.cache_backend.set(cache_key, payload, self.cache_ttl_seconds)
+            return payload
+
+        # Fallback compatible con estructura completa para no romper consumidores existentes.
         return {
+            "rol": "anonimo",
             "resumen": self._build_summary(periodo_activo),
             "asistencia_semanal": self._build_weekly_attendance(),
             "promedio_por_asignatura": self._build_subject_averages(periodo_activo),
             "rendimiento": self._build_performance_distribution(periodo_activo),
-            "proximas_clases": self._build_upcoming_classes(usuario),
+            "proximas_clases": self._build_upcoming_classes(None),
             "actividad_reciente": self._build_recent_activity(),
             "tareas_pendientes": self._build_pending_tasks(periodo_activo),
             "estudiantes_destacados": self._build_highlight_students(periodo_activo),
             "periodo_activo": self._format_period(periodo_activo),
         }
+
+    def _build_summary_for_docente(self, usuario, periodo_activo):
+        assignment_ids = self.access_service.get_assigned_assignment_ids(usuario)
+        total_cursos = len(assignment_ids)
+        grade_ids = DocenteAsignacion.objects.filter(id__in=assignment_ids).values_list("grado_id", flat=True)
+        estudiantes_total = Estudiantes.objects.filter(grado_id__in=grade_ids).count()
+
+        notas_qs = Notas.objects.filter(asignacion_id__in=assignment_ids, total__isnull=False)
+        if periodo_activo is not None:
+            notas_qs = notas_qs.filter(periodo=periodo_activo)
+        promedio = notas_qs.aggregate(promedio=Avg("total"))[
+            "promedio"
+        ] or 0
+
+        return [
+            {"titulo": "Mis Cursos", "valor": str(total_cursos), "detalle": "Asignaciones activas", "acento": "blue"},
+            {"titulo": "Estudiantes a Cargo", "valor": str(estudiantes_total), "detalle": "Estudiantes en mis grados", "acento": "violet"},
+            {"titulo": "Promedio de Mis Cursos", "valor": f"{promedio:.1f}", "detalle": self._period_comparison(periodo_activo), "acento": "green"},
+        ]
+
+    def _build_weekly_attendance_for_docente(self, usuario):
+        assignment_ids = self.access_service.get_assigned_assignment_ids(usuario)
+        grade_ids = DocenteAsignacion.objects.filter(id__in=assignment_ids).values_list("grado_id", flat=True)
+        hoy = timezone.localdate()
+        inicio = hoy - timedelta(days=4)
+        fechas = [inicio + timedelta(days=offset) for offset in range(5)]
+
+        aggregation = (
+            Asistencias.objects.filter(fecha__in=fechas, estudiante__grado_id__in=grade_ids)
+            .values("fecha")
+            .annotate(
+                total=Count("id"),
+                presentes=Count("id", filter=self._present_attendance_filter()),
+            )
+        )
+        stats = {item["fecha"]: item for item in aggregation}
+
+        data = []
+        for fecha in fechas:
+            item = stats.get(fecha)
+            if not item:
+                data.append(0)
+                continue
+            total = item.get("total") or 0
+            presentes = item.get("presentes") or 0
+            data.append(round((presentes / total) * 100) if total else 0)
+
+        labels = [self._weekday_label(fecha) for fecha in fechas]
+        return {"labels": labels, "data": data}
+
+    def _build_recent_activity_for_docente(self, usuario):
+        assignment_ids = self.access_service.get_assigned_assignment_ids(usuario)
+        grade_ids = DocenteAsignacion.objects.filter(id__in=assignment_ids).values_list("grado_id", flat=True)
+        activities = []
+        for asistencia in Asistencias.objects.select_related("estudiante__usuario").filter(estudiante__grado_id__in=grade_ids).order_by("-fecha")[:6]:
+            estudiante = asistencia.estudiante
+            nombre = f"{estudiante.nombres} {estudiante.primer_apellido}".strip()
+            activities.append(
+                {
+                    "persona": nombre,
+                    "detalle": f"Registró asistencia como {asistencia.estado}",
+                    "tiempo": self._relative_time(asistencia.fecha),
+                    "estado": "ok" if self._is_positive_state(asistencia.estado) else "warning",
+                }
+            )
+        return activities
+
+    def _build_dashboard_for_student(self, usuario, periodo_activo):
+        estudiante = Estudiantes.objects.filter(usuario=usuario).first()
+        if not estudiante:
+            return self._build_summary(periodo_activo)
+
+        notas_qs = Notas.objects.filter(estudiante=estudiante, total__isnull=False)
+        if periodo_activo is not None:
+            notas_qs = notas_qs.filter(periodo=periodo_activo)
+        promedio = notas_qs.aggregate(promedio=Avg("total"))["promedio"] or 0
+
+        asistencias = Asistencias.objects.filter(estudiante=estudiante)
+        attendance_agg = asistencias.aggregate(
+            total=Count("id"),
+            presentes=Count("id", filter=self._present_attendance_filter()),
+        )
+        total = attendance_agg.get("total") or 0
+        presentes = attendance_agg.get("presentes") or 0
+        porcentaje = round((presentes / total) * 100) if total else 0
+
+        return [
+            {"titulo": "Mi Promedio", "valor": f"{promedio:.1f}", "detalle": self._period_comparison(periodo_activo), "acento": "green"},
+            {"titulo": "Mi Asistencia", "valor": f"{porcentaje}%", "detalle": f"{presentes} de {total} registros", "acento": "orange"},
+        ]
+
+    def _build_recent_activity_for_student(self, usuario):
+        estudiante = Estudiantes.objects.filter(usuario=usuario).first()
+        if not estudiante:
+            return []
+        activities = []
+        for asistencia in Asistencias.objects.filter(estudiante=estudiante).order_by("-fecha")[:6]:
+            activities.append(
+                {
+                    "persona": f"{estudiante.nombres} {estudiante.primer_apellido}".strip(),
+                    "detalle": f"Registró asistencia como {asistencia.estado}",
+                    "tiempo": self._relative_time(asistencia.fecha),
+                    "estado": "ok" if self._is_positive_state(asistencia.estado) else "warning",
+                }
+            )
+        return activities
 
     def _get_periodo_activo(self):
         periodo = Periodos.objects.filter(activo=True).order_by("-gestion", "-numero").first()
@@ -41,7 +222,10 @@ class DashboardService:
 
         hoy = timezone.localdate()
         asistencias_hoy = Asistencias.objects.filter(fecha=hoy)
-        presentes_hoy = asistencias_hoy.exclude(estado__iexact="Falta").exclude(estado__iexact="Ausente").count()
+        agg_hoy = asistencias_hoy.aggregate(
+            presentes=Count("id", filter=self._present_attendance_filter()),
+        )
+        presentes_hoy = agg_hoy.get("presentes") or 0
         porcentaje_asistencia = round((presentes_hoy / total_estudiantes) * 100) if total_estudiantes else 0
 
         return [
@@ -77,20 +261,35 @@ class DashboardService:
         fechas = [inicio + timedelta(days=offset) for offset in range(5)]
         labels = [self._weekday_label(fecha) for fecha in fechas]
 
+        aggregation = (
+            Asistencias.objects.filter(fecha__in=fechas)
+            .values("fecha")
+            .annotate(
+                total=Count("id"),
+                presentes=Count("id", filter=self._present_attendance_filter()),
+            )
+        )
+        stats = {item["fecha"]: item for item in aggregation}
+
         data = []
         for fecha in fechas:
-            asistencias = Asistencias.objects.filter(fecha=fecha)
-            presentes = asistencias.exclude(estado__iexact="Falta").exclude(estado__iexact="Ausente").count()
-            total = asistencias.count()
+            item = stats.get(fecha)
+            if not item:
+                data.append(0)
+                continue
+            total = item.get("total") or 0
+            presentes = item.get("presentes") or 0
             porcentaje = round((presentes / total) * 100) if total else 0
             data.append(porcentaje)
 
         return {"labels": labels, "data": data}
 
-    def _build_subject_averages(self, periodo_activo):
+    def _build_subject_averages(self, periodo_activo, assignment_ids=None):
         notas_qs = Notas.objects.filter(total__isnull=False).select_related("asignacion__area")
         if periodo_activo is not None:
             notas_qs = notas_qs.filter(periodo=periodo_activo)
+        if assignment_ids is not None:
+            notas_qs = notas_qs.filter(asignacion_id__in=assignment_ids)
 
         aggregation = (
             notas_qs.values("asignacion__area__nombre")
@@ -151,14 +350,21 @@ class DashboardService:
             if usuario_asignaciones.exists():
                 asignaciones = usuario_asignaciones
 
+        primeras = list(asignaciones[:3])
+        grade_ids = [a.grado_id for a in primeras]
+        student_count_map = {}
+        if grade_ids:
+            aggregation = Estudiantes.objects.filter(grado_id__in=grade_ids).values("grado_id").annotate(total=Count("id"))
+            student_count_map = {item["grado_id"]: item["total"] for item in aggregation}
+
         items = []
-        for asignacion in asignaciones[:3]:
+        for asignacion in primeras:
             items.append(
                 {
                     "titulo": f"{asignacion.area.nombre}",
                     "detalle": f"{asignacion.grado.nivel} {asignacion.grado.numero}{asignacion.grado.paralelo}",
                     "subdetalle": "Horario por definir",
-                    "estudiantes": self._count_students_for_grade(asignacion.grado_id),
+                    "estudiantes": student_count_map.get(asignacion.grado_id, 0),
                 }
             )
         return items
@@ -166,10 +372,10 @@ class DashboardService:
     def _build_recent_activity(self):
         activities = []
 
-        for asistencia in Asistencias.objects.select_related("estudiante__usuario").order_by("-fecha")[:4]:
+        for asistencia in Asistencias.objects.select_related("estudiante").order_by("-fecha")[:3]:
             estudiante = asistencia.estudiante
             nombre = f"{estudiante.nombres} {estudiante.primer_apellido}".strip()
-            timestamp = timezone.make_aware(datetime.combine(asistencia.fecha, datetime.min.time()))
+            timestamp = self._normalize_datetime(datetime.combine(asistencia.fecha, datetime.min.time()))
             activities.append(
                 (
                     timestamp,
@@ -182,11 +388,11 @@ class DashboardService:
                 )
             )
 
-        for nota in Notas.objects.select_related("estudiante", "asignacion__area").filter(total__isnull=False).order_by("-updated_at", "-created_at")[:4]:
+        for nota in Notas.objects.select_related("estudiante", "asignacion__area").filter(total__isnull=False).order_by("-updated_at", "-created_at")[:3]:
             estudiante = nota.estudiante
             nombre = f"{estudiante.nombres} {estudiante.primer_apellido}".strip()
             materia = nota.asignacion.area.nombre if nota.asignacion and nota.asignacion.area else "Asignatura"
-            timestamp = nota.updated_at or nota.created_at or timezone.now()
+            timestamp = self._normalize_datetime(nota.updated_at or nota.created_at or timezone.now())
             activities.append(
                 (
                     timestamp,
@@ -199,10 +405,10 @@ class DashboardService:
                 )
             )
 
-        for licencia in Licencias.objects.select_related("estudiante").order_by("-created_at")[:2]:
+        for licencia in Licencias.objects.select_related("estudiante").order_by("-created_at")[:1]:
             estudiante = licencia.estudiante
             nombre = f"{estudiante.nombres} {estudiante.primer_apellido}".strip()
-            timestamp = licencia.created_at or timezone.now()
+            timestamp = self._normalize_datetime(licencia.created_at or timezone.now())
             activities.append(
                 (
                     timestamp,
@@ -215,7 +421,7 @@ class DashboardService:
                 )
             )
 
-        activities.sort(key=lambda item: item[0], reverse=True)
+        activities.sort(key=lambda item: item[0].replace(tzinfo=timezone.get_current_timezone()) if item[0].tzinfo is None else item[0], reverse=True)
         return [item[1] for item in activities[:4]]
 
     def _build_pending_tasks(self, periodo_activo):
@@ -264,8 +470,21 @@ class DashboardService:
             )
         return items
 
-    def _count_students_for_grade(self, grado_id):
-        return Estudiantes.objects.filter(grado_id=grado_id).count()
+    def _cache_key(self, usuario, rol, periodo_activo):
+        user_id = getattr(usuario, "id", "anon")
+        periodo_id = getattr(periodo_activo, "id", "none")
+        today = timezone.localdate().isoformat()
+        return f"dashboard:{user_id}:{rol}:{periodo_id}:{today}"
+
+    def _present_attendance_filter(self):
+        return ~Q(estado__iexact="Falta") & ~Q(estado__iexact="Ausente") & ~Q(estado__iexact="Inasistencia")
+
+    def _normalize_datetime(self, value):
+        if value is None:
+            return timezone.now()
+        if timezone.is_aware(value):
+            return value
+        return timezone.make_aware(value)
 
     def _format_period(self, periodo_activo):
         if periodo_activo is None:
@@ -306,4 +525,4 @@ class DashboardService:
 
     def _is_positive_state(self, estado):
         estado_normalizado = (estado or "").strip().lower()
-        return estado_normalizado not in {"falta", "ausente", "inasistencia"}
+        return estado_normalizado not in self.NEGATIVE_ATTENDANCE_STATES
