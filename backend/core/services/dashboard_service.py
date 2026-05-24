@@ -12,7 +12,7 @@ from .access_service import AccessControlService
 class DashboardService:
     NEGATIVE_ATTENDANCE_STATES = {"falta", "ausente", "inasistencia"}
 
-    def __init__(self, access_service=None, cache_backend=None, cache_ttl_seconds=20):
+    def __init__(self, access_service=None, cache_backend=None, cache_ttl_seconds=300):
         self.access_service = access_service or AccessControlService()
         self.cache_backend = cache_backend or cache
         self.cache_ttl_seconds = cache_ttl_seconds

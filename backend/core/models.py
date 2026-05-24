@@ -81,6 +81,7 @@ class Estudiantes(models.Model):
 	primer_apellido = models.TextField(unique=True)
 	segundo_apellido = models.TextField(blank=True, null=True)
 	nombres = models.TextField()
+	rude = models.TextField(unique=True, blank=True, null=True)
 	ci = models.TextField(unique=True, blank=True, null=True)
 	fecha_nacimiento = models.DateField(blank=True, null=True)
 	genero = models.CharField(max_length=1, blank=True, null=True)

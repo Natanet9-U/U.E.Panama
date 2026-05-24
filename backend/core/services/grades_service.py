@@ -277,7 +277,7 @@ class GradesService:
         # lazy import models
         from ..models import Notas, NotaDetalle, DimensionesEvaluacion
         updated = []
-        dimensiones_map = {d.id: d for d in DimensionesEvaluacion.objects.all()}
+        dimensiones_map = {d.id: d for d in DimensionesEvaluacion.objects.filter(activo=True)}
 
         for item in payload or []:
             estudiante_id = item.get("estudiante_id")
@@ -298,7 +298,6 @@ class GradesService:
                 nota_obj.id = uuid4()
 
             # save/replace detalle values
-            total_percentages = []
             for det in detalles:
                 dim_id = det.get("dimension_id")
                 valor = det.get("valor")
@@ -320,16 +319,19 @@ class GradesService:
                 )
 
                 try:
-                    pct = (int(valor) / float(dim.puntaje_maximo)) * 100 if dim.puntaje_maximo else 0
+                    dim_value = int(valor)
                 except Exception:
-                    pct = 0
+                    dim_value = 0
 
-                total_percentages.append(pct)
+                if dim.puntaje_maximo:
+                    dim_value = max(0, min(dim_value, int(dim.puntaje_maximo)))
 
-            # compute nota total as average of dimension percentages
-            if total_percentages:
-                nota_total = int(round(sum(total_percentages) / len(total_percentages)))
-            else:
+            # compute nota total from all active dimension details currently stored for the note
+            nota_total = sum(
+                int(detalle.valor or 0)
+                for detalle in NotaDetalle.objects.filter(nota=nota_obj, dimension__activo=True).select_related("dimension")
+            )
+            if nota_total == 0 and not NotaDetalle.objects.filter(nota=nota_obj).exists():
                 nota_total = None
 
             nota_obj.total = nota_total
@@ -439,6 +441,10 @@ class GradesService:
         from uuid import uuid4
         from django.utils import timezone
 
+        periodo = Periodos.objects.filter(id=periodo_id).first()
+        if not periodo:
+            raise ValueError("Periodo no encontrado")
+
         # determine students in the assignment's grado
         grado_id = DocenteAsignacion.objects.filter(id=asignacion_id).values_list('grado_id', flat=True).first()
         if not grado_id:
@@ -447,20 +453,34 @@ class GradesService:
         estudiantes = Estudiantes.objects.filter(grado_id=grado_id)
         updated = []
 
+        actividades_qs = Actividades.objects.filter(asignacion_id=asignacion_id)
+        if periodo.fecha_inicio and periodo.fecha_fin:
+            actividades_qs = actividades_qs.filter(fecha__range=(periodo.fecha_inicio, periodo.fecha_fin))
+        actividades_qs = list(actividades_qs.select_related("dimension"))
+
+        dimensiones = list(DimensionesEvaluacion.objects.filter(gestion=periodo.gestion, activo=True).order_by("orden"))
+        auto_dimension = next((d for d in dimensiones if self._is_autoevaluacion_dimension(d.nombre)), None)
+        dimensiones_normales = [d for d in dimensiones if not self._is_autoevaluacion_dimension(d.nombre)]
+
         # All activities contribute only to Nota.total (do not modify NotaDetalle)
         for s in estudiantes:
-            an_qs = ActividadNotas.objects.filter(actividad__asignacion_id=asignacion_id, estudiante_id=s.id).select_related('actividad')
-            total_val = 0
-            total_max = 0
+            an_qs = (
+                ActividadNotas.objects.filter(actividad__in=actividades_qs, estudiante_id=s.id)
+                .select_related("actividad", "actividad__dimension")
+            )
+
+            scores_by_dimension = {}
             for an in an_qs:
                 act = an.actividad
-                total_val += int(an.valor or 0)
-                total_max += int(act.puntaje_maximo or 0) if act else 0
+                dimension = getattr(act, "dimension", None)
+                if dimension is None or self._is_autoevaluacion_dimension(dimension.nombre):
+                    continue
 
-            if total_max:
-                nota_total = int(round((total_val / float(total_max)) * 100))
-            else:
-                nota_total = None
+                if not act.puntaje_maximo:
+                    continue
+
+                normalized = (int(an.valor or 0) / float(act.puntaje_maximo)) * 100
+                scores_by_dimension.setdefault(dimension.id, []).append(normalized)
 
             nota_obj, created = Notas.objects.get_or_create(
                 estudiante_id=s.id,
@@ -469,6 +489,29 @@ class GradesService:
                 defaults={"id": uuid4(), "created_at": timezone.now()},
             )
 
+            detalle_values = {}
+            for dimension in dimensiones_normales:
+                valores = scores_by_dimension.get(dimension.id, [])
+                if valores:
+                    detalle_values[dimension.id] = int(round((sum(valores) / len(valores)) * (dimension.puntaje_maximo / 100.0)))
+
+            if auto_dimension is not None:
+                auto_detalle = NotaDetalle.objects.filter(nota=nota_obj, dimension=auto_dimension).first()
+                if auto_detalle is not None:
+                    detalle_values[auto_dimension.id] = int(auto_detalle.valor or 0)
+                else:
+                    detalle_values[auto_dimension.id] = 0
+
+            for dimension in dimensiones:
+                if dimension.id not in detalle_values:
+                    continue
+                NotaDetalle.objects.update_or_create(
+                    nota=nota_obj,
+                    dimension=dimension,
+                    defaults={"valor": max(0, min(int(detalle_values[dimension.id]), int(dimension.puntaje_maximo)))},
+                )
+
+            nota_total = sum(int(value) for value in detalle_values.values()) if detalle_values else None
             nota_obj.total = nota_total
             nota_obj.updated_at = timezone.now()
             nota_obj.save()
@@ -476,3 +519,8 @@ class GradesService:
             updated.append({"estudiante_id": str(s.id), "nota_total": nota_total})
 
         return updated
+
+    def _is_autoevaluacion_dimension(self, nombre):
+        normalized = (nombre or "").strip().lower()
+        normalized = normalized.replace("á", "a").replace("é", "e").replace("í", "i").replace("ó", "o").replace("ú", "u")
+        return normalized.startswith("autoevalu")
