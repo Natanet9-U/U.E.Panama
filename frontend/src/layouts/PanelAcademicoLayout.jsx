@@ -77,25 +77,27 @@ function PanelAcademicoLayout() {
   const roleLabel = roleRaw ? `${roleRaw}`.charAt(0).toUpperCase() + `${roleRaw}`.slice(1) : "Docente";
   const navigate = useNavigate();
   const [showSettings, setShowSettings] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   return (
     <div className="min-h-screen bg-slate-50">
       <div className="flex min-h-screen">
-        <aside className="hidden lg:flex lg:w-72 lg:flex-col lg:rounded-r-2xl lg:bg-white lg:shadow-md">
-          <div className="flex h-full flex-col justify-between p-6">
+        <aside className={`hidden lg:flex lg:flex-col lg:rounded-r-2xl lg:bg-white lg:shadow-md transition-all duration-300 ${sidebarOpen ? 'lg:w-72' : 'lg:w-20'}`}>
+          <div className="flex h-full flex-col p-6">
             <div>
-              <div className="mb-6 flex items-center gap-3">
-                <div className="rounded-md bg-indigo-50 p-2">
-                  <svg className="h-6 w-6 text-indigo-600" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M12 3L3 8v6c0 5 4 9 9 9s9-4 9-9V8l-9-5z" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
+              <div className={`mb-6 flex items-center gap-4 ${!sidebarOpen ? 'justify-center' : ''}`}>
+                <div className="flex-shrink-0 rounded-md bg-indigo-50 p-3">
+                  <img src="/assets/login/logo-Colegio.png" alt="Logo Unidad Educativa Republica de Panama" className="h-12 w-12 flex-shrink-0" />
                 </div>
-                <div>
-                  <h1 className="text-lg font-bold text-slate-900">U.E.Panama</h1>
-                  <p className="text-xs text-slate-400">Panel docente</p>
-                </div>
+                {sidebarOpen && (
+                  <div>
+                    <h1 className="text-lg font-bold text-slate-900">U.E.Panama</h1>
+                    <p className="text-xs text-slate-400">Panel docente</p>
+                  </div>
+                )}
               </div>
 
+              {sidebarOpen && (
               <nav className="flex flex-col gap-2">
                 {menu.filter((item) => {
                   if (!item.rolesVisibles) return true;
@@ -118,14 +120,28 @@ function PanelAcademicoLayout() {
                   </NavLink>
                 ))}
               </nav>
+              )}
             </div>
 
-            <div className="mt-6 flex items-center gap-3 rounded-lg border border-slate-100 bg-slate-50 p-3">
-              <img src="/assets/login/avatar.png" alt="avatar" className="h-10 w-10 rounded-full object-cover" />
-              <div>
-                <div className="text-sm font-semibold text-slate-900">{usuario ? `${usuario.nombre} ${usuario.apellido}` : "María Álvarez"}</div>
-                <div className="text-xs text-slate-400">{roleLabel}</div>
+            <div className="mt-auto pt-6">
+              {sidebarOpen && (
+              <div className="flex items-center gap-3 rounded-lg border border-slate-100 bg-slate-50 p-3">
+                <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-slate-900 text-sm font-black text-white">
+                  {usuario ? `${usuario.nombre?.charAt(0) || ''}${usuario.apellido?.charAt(0) || ''}`.toUpperCase() : 'MA'}
+                </div>
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-slate-900">{usuario ? `${usuario.nombre} ${usuario.apellido}` : "María Álvarez"}</div>
+                  <div className="text-xs text-slate-400">{roleLabel}</div>
+                </div>
               </div>
+              )}
+              <button
+                onClick={() => setSidebarOpen(!sidebarOpen)}
+                className="mt-4 w-full rounded-lg border border-slate-200 bg-slate-50 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-100"
+                title={sidebarOpen ? "Contraer" : "Expandir"}
+              >
+                {sidebarOpen ? "←" : "→"}
+              </button>
             </div>
           </div>
         </aside>
@@ -133,6 +149,7 @@ function PanelAcademicoLayout() {
         <div className="flex flex-1 flex-col">
           <header className="sticky top-0 z-20 flex items-center justify-between border-b bg-white px-6 py-3">
             <div className="flex items-center gap-4">
+              <button className="hidden lg:block rounded-md p-2 text-slate-600 hover:bg-slate-100" onClick={() => setSidebarOpen(!sidebarOpen)} title={sidebarOpen ? "Contraer" : "Expandir"}>☰</button>
               <button className="lg:hidden rounded-md p-2 text-slate-600">☰</button>
               <h2 className="text-lg font-semibold text-slate-900">U.E.Panama</h2>
             </div>
@@ -164,7 +181,9 @@ function PanelAcademicoLayout() {
               </div>
 
               <div className="flex items-center gap-3">
-                <img src="/assets/login/avatar.png" alt="avatar" className="h-9 w-9 rounded-full object-cover" />
+                <div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-900 text-xs font-black text-white">
+                  {usuario ? `${usuario.nombre?.charAt(0) || ''}${usuario.apellido?.charAt(0) || ''}`.toUpperCase() : 'MA'}
+                </div>
               </div>
             </div>
           </header>

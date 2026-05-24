@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import courses_view, dashboard_view, grades_view, health_view, login_view, logout_view, me_view, reports_view, schedules_view, students_view, docentes_view, attendance_view, licencias_view, change_password_view, grades_update_view, course_detail_view, actividades_view, actividades_notas_view, actividades_notas_estudiante_view, recompute_actividades_view, enrollment_search_view, enrollment_new_view, enrollment_re_enroll_view, enrollment_catalogs_view
+from .views import courses_view, dashboard_view, grades_view, health_view, login_view, logout_view, me_view, reports_view, reports_download_view, schedules_view, students_view, docentes_view, attendance_view, licencias_view, change_password_view, grades_update_view, course_detail_view, actividades_view, actividades_notas_view, actividades_notas_estudiante_view, actividad_delete_view, recompute_actividades_view, enrollment_search_view, enrollment_new_view, enrollment_re_enroll_view, enrollment_catalogs_view, search_tutor_by_ci_view
 
 urlpatterns = [
     path('health/', health_view, name='health'),
@@ -14,6 +14,7 @@ urlpatterns = [
     path('enrollment/new/', enrollment_new_view, name='enrollment_new'),
     path('enrollment/re-enroll/', enrollment_re_enroll_view, name='enrollment_re_enroll'),
     path('enrollment/catalogs/', enrollment_catalogs_view, name='enrollment_catalogs'),
+    path('enrollment/search-tutor/', search_tutor_by_ci_view, name='search_tutor_by_ci'),
     path('courses/', courses_view, name='courses'),
     path('attendance/', attendance_view, name='attendance'),
     path('licencias/', licencias_view, name='licencias'),
@@ -22,9 +23,11 @@ urlpatterns = [
     path('grades/recompute-actividades/', recompute_actividades_view, name='grades_recompute_actividades'),
     path('courses/detail/', course_detail_view, name='course_detail'),
     path('actividades/', actividades_view, name='actividades'),
+    path('actividades/<uuid:actividad_id>/', actividad_delete_view, name='actividad_delete'),
     path('actividades/notas/', actividades_notas_view, name='actividades_notas'),
     path('actividades/notas-estudiante/', actividades_notas_estudiante_view, name='actividades_notas_estudiante'),
     path('reports/', reports_view, name='reports'),
+    path('reports/download/', reports_download_view, name='reports_download'),
     path('schedules/', schedules_view, name='schedules'),
     path('login/', login_view, name='login'),
 ]

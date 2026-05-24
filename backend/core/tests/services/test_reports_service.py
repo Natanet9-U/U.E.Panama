@@ -87,5 +87,30 @@ class TestReportsService:
         courses = self.service._build_courses([SimpleNamespace(asignacion_id=asign.id, estudiante_id=estudiante.id, total=95)], usuario)
         assert courses[0]["nombre"] == "Biologia"
 
+    @pytest.mark.django_db
+    def test_build_report_document_generates_docx(self):
+        usuario = UsuarioFactory()
+        periodo = Periodos.objects.create(id=uuid4(), nombre="3er Trimestre", numero=3, gestion=2026, fecha_inicio="2026-09-01", fecha_fin="2026-11-30", activo=True)
+        grado = Grados.objects.create(id=uuid4(), nivel="Primaria", numero=2, paralelo="A", gestion=2026)
+        area = Areas.objects.create(id=uuid4(), nombre="COMUNICACIÓN Y LENGUAJE")
+        docente_user = UsuarioFactory()
+        docente = Docentes.objects.create(id=uuid4(), usuario=docente_user)
+        asign = DocenteAsignacion.objects.create(id=uuid4(), docente=docente, grado=grado, area=area)
+        estudiante = Estudiantes.objects.create(
+            id=uuid4(),
+            usuario=UsuarioFactory(),
+            grado=grado,
+            primer_apellido="Perez",
+            nombres="Ana",
+            ci="CI100",
+            genero="F",
+        )
+        Notas.objects.create(id=uuid4(), estudiante=estudiante, asignacion=asign, periodo=periodo, total=65)
+
+        document_bytes = self.service.build_report_document(usuario, periodo_id=periodo.id, trimestre=3)
+
+        assert isinstance(document_bytes, bytes)
+        assert document_bytes[:2] == b"PK"
+
 
 # Agrega tests específicos para el servicio de reportes

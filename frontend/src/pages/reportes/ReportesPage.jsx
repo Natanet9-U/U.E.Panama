@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import LineChartMock from "../../components/charts/LineChartMock";
-import { getReportsPage } from "../../services/reportsService";
+import { downloadReportsDocument, getReportsPage } from "../../services/reportsService";
 
 const EMPTY_ARRAY = [];
 
@@ -83,48 +83,24 @@ function SubjectRank({ rank, name, average }) {
   );
 }
 
-function ReportFile({ title, category, date, size }) {
-  const categoryStyles = {
-    Académico: "bg-blue-50 text-blue-700",
-    Asistencia: "bg-emerald-50 text-emerald-700",
-    Evaluación: "bg-violet-50 text-violet-700",
-    Estadísticas: "bg-orange-50 text-orange-700",
-  };
-
-  return (
-    <article className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white p-5">
-      <div className="flex items-center gap-4">
-        <div className="rounded-2xl bg-slate-100 p-3">
-          <svg className="h-6 w-6 text-slate-600" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-            <polyline points="14 2 14 8 20 8" />
-          </svg>
-        </div>
-        <div>
-          <p className="text-sm font-semibold text-slate-900">{title}</p>
-          <div className="mt-1 flex items-center gap-3">
-            <span className={`rounded-full px-2 py-1 text-xs font-semibold ${categoryStyles[category] || categoryStyles.Académico}`}>{category}</span>
-            <p className="text-xs text-slate-500">{date} · {size}</p>
-          </div>
-        </div>
-      </div>
-      <button type="button" className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
-        Descargar
-      </button>
-    </article>
-  );
-}
-
 function ReportesPage() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [downloading, setDownloading] = useState(false);
+  const [trimestre, setTrimestre] = useState("3");
+
+  const trimestreOptions = [
+    { value: "1", label: "1er Trimestre" },
+    { value: "2", label: "2do Trimestre" },
+    { value: "3", label: "3er Trimestre" },
+  ];
 
   useEffect(() => {
     let mounted = true;
     setLoading(true);
 
-    getReportsPage({})
+    getReportsPage({ trimestre })
       .then((response) => {
         if (!mounted) return;
         setData(response);
@@ -143,7 +119,32 @@ function ReportesPage() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [trimestre]);
+
+  const handleDownload = async () => {
+    try {
+      setDownloading(true);
+      const response = await downloadReportsDocument({ trimestre });
+      const blob = new Blob([response.data], {
+        type: response.headers["content-type"] || "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      const contentDisposition = response.headers["content-disposition"] || "";
+      const fileNameMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
+
+      link.href = url;
+      link.download = fileNameMatch ? fileNameMatch[1] : "informe_reporte.docx";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (downloadError) {
+      setError(downloadError?.response?.data?.error || "No fue posible descargar el reporte");
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   const resumen = data?.resumen || EMPTY_ARRAY;
 
@@ -157,11 +158,25 @@ function ReportesPage() {
             <p className="mt-2 max-w-2xl text-base text-slate-600">Análisis y estadísticas del desempeño académico</p>
           </div>
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+            <label className="flex flex-col gap-2 text-sm font-semibold text-slate-600">
+              Trimestre
+              <select
+                value={trimestre}
+                onChange={(event) => setTrimestre(event.target.value)}
+                className="min-w-40 rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-900 outline-none transition focus:border-slate-950"
+              >
+                {trimestreOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
             <button type="button" className="rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
               Todos los reportes
             </button>
-            <button type="button" className="rounded-2xl bg-slate-950 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-slate-200 transition hover:bg-slate-800">
-              Generar Reporte
+            <button type="button" onClick={handleDownload} disabled={downloading} className="rounded-2xl bg-slate-950 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-slate-200 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70">
+              {downloading ? "Descargando..." : "Descargar informe"}
             </button>
           </div>
         </div>
@@ -238,35 +253,6 @@ function ReportesPage() {
         </article>
       </div>
 
-      <section className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-[0_18px_50px_rgba(15,23,42,0.05)]">
-        <h2 className="text-xl font-black text-slate-950">Reportes Generados</h2>
-        <div className="mt-6 space-y-3">
-          <ReportFile 
-            title="Reporte de Rendimiento Académico - Semestre 1" 
-            category="Académico" 
-            date="15 Jun 2024" 
-            size="2.4 MB" 
-          />
-          <ReportFile 
-            title="Análisis de Asistencia - Mayo 2024" 
-            category="Asistencia" 
-            date="1 Jun 2024" 
-            size="1.8 MB" 
-          />
-          <ReportFile 
-            title="Evaluación de Cursos - Trimestre 2" 
-            category="Evaluación" 
-            date="28 May 2024" 
-            size="3.1 MB" 
-          />
-          <ReportFile 
-            title="Estadísticas de Estudiantes - Anual" 
-            category="Estadísticas" 
-            date="15 May 2024" 
-            size="4.2 MB" 
-          />
-        </div>
-      </section>
     </section>
   );
 }

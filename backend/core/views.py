@@ -1,5 +1,6 @@
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
+from django.http import HttpResponse
 from django.contrib.auth.hashers import check_password, make_password
 from .models import Usuarios
 from .auth_utils import build_token
@@ -218,17 +219,17 @@ def docentes_view(request):
 
 @api_view(["GET"])
 def enrollment_search_view(request):
-    """Search for existing students by CI for re-enrollment."""
+    """Search for existing students by RUDE for re-enrollment."""
     usuario = getattr(request, "usuario", None)
     if usuario is None:
         return Response({"error": "No autorizado"}, status=401)
 
-    ci = request.query_params.get("ci", "").strip()
-    if not ci:
-        return Response({"error": "Debes proporcionar un CI"}, status=400)
+    rude = request.query_params.get("rude", "").strip()
+    if not rude:
+        return Response({"error": "Debes proporcionar un R.U.D.E."}, status=400)
 
     service = EnrollmentService()
-    resultado = service.search_existing_student(ci)
+    resultado = service.search_existing_student(rude)
 
     if resultado is None:
         return Response({"encontrado": False, "mensaje": "Estudiante no encontrado"}, status=200)
@@ -261,16 +262,16 @@ def enrollment_re_enroll_view(request):
     if usuario is None:
         return Response({"error": "No autorizado"}, status=401)
 
-    ci = request.data.get("ci")
+    rude = request.data.get("rude")
     new_grado_id = request.data.get("grado_id")
 
-    if not ci or not new_grado_id:
-        return Response({"error": "Debes enviar ci y grado_id"}, status=400)
+    if not rude or not new_grado_id:
+        return Response({"error": "Debes enviar rude y grado_id"}, status=400)
 
     service = EnrollmentService()
 
     try:
-        resultado = service.re_enroll_existing_student(usuario, ci, new_grado_id)
+        resultado = service.re_enroll_existing_student(usuario, rude, new_grado_id)
         return Response(resultado, status=200)
     except PermissionError as exc:
         return Response({"error": str(exc)}, status=403)
@@ -288,6 +289,36 @@ def enrollment_catalogs_view(request):
     service = EnrollmentService()
     catalogs = service.get_enrollment_catalogs(usuario)
     return Response(catalogs, status=200)
+
+
+@api_view(["GET"])
+def search_tutor_by_ci_view(request):
+    """Search for an existing tutor by CI."""
+    usuario = getattr(request, "usuario", None)
+    if usuario is None:
+        return Response({"error": "No autorizado"}, status=401)
+
+    ci = request.query_params.get("ci", "").strip()
+    if not ci:
+        return Response({"error": "Debes proporcionar un CI"}, status=400)
+
+    from .models import Tutores
+    tutor = Tutores.objects.filter(ci__iexact=ci).order_by("nombre", "id").first()
+    if tutor:
+        return Response({
+            "encontrado": True,
+            "tutor": {
+                "id": str(tutor.id),
+                "nombre": tutor.nombre,
+                "apellido": tutor.apellido or "",
+                "ci": tutor.ci,
+                "telefono": tutor.telefono or "",
+                "ocupacion": tutor.ocupacion or "",
+                "direccion": tutor.direccion or "",
+            }
+        }, status=200)
+
+    return Response({"encontrado": False}, status=200)
 
 
 @api_view(["GET", "POST"])
@@ -403,6 +434,7 @@ def course_detail_view(request):
     estudiantes = [{"id": str(s.id), "nombre": f"{s.nombres} {s.primer_apellido}"} for s in students_qs]
 
     dimensiones = []
+    periodos = []
     try:
         # infer gestion from grado via first periodo if not provided
         gestion = None
@@ -411,10 +443,14 @@ def course_detail_view(request):
         if not gestion:
             gestion = Periodos.objects.order_by("-gestion").values_list("gestion", flat=True).first()
 
-        dimensiones_qs = DimensionesEvaluacion.objects.filter(gestion=gestion).order_by("orden")
-        dimensiones = [{"id": str(d.id), "nombre": d.nombre, "puntaje_maximo": d.puntaje_maximo} for d in dimensiones_qs]
+        periodos_qs = Periodos.objects.order_by("-gestion", "-numero")
+        periodos = [{"id": str(p.id), "nombre": f"{p.nombre} {p.gestion}", "numero": p.numero, "gestion": p.gestion, "activo": p.activo} for p in periodos_qs]
+
+        dimensiones_qs = DimensionesEvaluacion.objects.filter(gestion=gestion, activo=True).order_by("orden")
+        dimensiones = [{"id": str(d.id), "nombre": d.nombre, "puntaje_maximo": d.puntaje_maximo, "descripcion": d.descripcion, "orden": d.orden, "activo": d.activo} for d in dimensiones_qs]
     except Exception:
         dimensiones = []
+        periodos = []
 
     notas = []
     if periodo_id:
@@ -431,7 +467,7 @@ def course_detail_view(request):
     try:
         acts_qs = Actividades.objects.filter(asignacion_id=asignacion_id).order_by("orden", "fecha")
         for a in acts_qs:
-            actividades.append({"id": str(a.id), "nombre": a.nombre, "puntaje_maximo": a.puntaje_maximo, "dimension_id": str(a.dimension_id) if a.dimension_id else None, "fecha": a.fecha})
+            actividades.append({"id": str(a.id), "nombre": a.nombre, "puntaje_maximo": a.puntaje_maximo, "dimension_id": str(a.dimension_id) if a.dimension_id else None, "dimension_nombre": a.dimension.nombre if a.dimension_id else None, "fecha": a.fecha})
 
         # cargar notas por actividad
         actividad_notas_map = {}
@@ -448,9 +484,9 @@ def course_detail_view(request):
             resumen = GradesService().compute_trimestral_and_overall(asignacion_id)
         except Exception:
             resumen = []
-        return Response({"estudiantes": estudiantes, "dimensiones": dimensiones, "notas": notas, "resumen": resumen, "actividades": actividades, "actividad_notas": actividad_notas_map}, status=200)
+        return Response({"estudiantes": estudiantes, "dimensiones": dimensiones, "periodos": periodos, "notas": notas, "resumen": resumen, "actividades": actividades, "actividad_notas": actividad_notas_map}, status=200)
 
-    return Response({"estudiantes": estudiantes, "dimensiones": dimensiones, "notas": notas}, status=200)
+    return Response({"estudiantes": estudiantes, "dimensiones": dimensiones, "periodos": periodos, "notas": notas, "actividades": actividades, "actividad_notas": actividad_notas_map}, status=200)
 
 
 @api_view(["GET", "POST"])
@@ -467,12 +503,20 @@ def actividades_view(request):
         dimension_id = request.data.get("dimension_id")
         fecha = request.data.get("fecha")
 
-        if not asignacion_id or not nombre:
-            return Response({"error": "Debe enviar asignacion_id y nombre"}, status=400)
+        if not asignacion_id or not nombre or not dimension_id:
+            return Response({"error": "Debe enviar asignacion_id, nombre y dimension_id"}, status=400)
 
         assigned = AccessControlService().get_assigned_assignment_ids(usuario)
         if not (AccessControlService().can_view_all_academic_data(usuario) or (asignacion_id in assigned)):
             return Response({"error": "No tienes permisos para crear actividades en esta asignación"}, status=403)
+
+        dimension = DimensionesEvaluacion.objects.filter(id=dimension_id).first()
+        if dimension is None:
+            return Response({"error": "La dimensión seleccionada no existe"}, status=400)
+
+        dimension_nombre = (dimension.nombre or "").strip().lower().replace("á", "a").replace("é", "e").replace("í", "i").replace("ó", "o").replace("ú", "u")
+        if dimension_nombre.startswith("autoevalu"):
+            return Response({"error": "La autoevaluación se registra como una nota fija del trimestre"}, status=400)
 
         act = Actividades.objects.create(
             id=uuid4(),
@@ -484,7 +528,7 @@ def actividades_view(request):
             created_at=timezone.now(),
         )
 
-        return Response({"mensaje": "Actividad creada", "actividad": {"id": str(act.id), "nombre": act.nombre, "puntaje_maximo": act.puntaje_maximo}}, status=201)
+        return Response({"mensaje": "Actividad creada", "actividad": {"id": str(act.id), "nombre": act.nombre, "puntaje_maximo": act.puntaje_maximo, "dimension_id": str(act.dimension_id) if act.dimension_id else None, "dimension_nombre": act.dimension.nombre if act.dimension_id else None}}, status=201)
 
     # GET: listar actividades por asignacion
     asignacion_id = request.query_params.get("asignacion_id")
@@ -493,9 +537,30 @@ def actividades_view(request):
 
     acts = []
     for a in Actividades.objects.filter(asignacion_id=asignacion_id).order_by("orden", "fecha"):
-        acts.append({"id": str(a.id), "nombre": a.nombre, "puntaje_maximo": a.puntaje_maximo, "dimension_id": str(a.dimension_id) if a.dimension_id else None, "fecha": a.fecha})
+        acts.append({"id": str(a.id), "nombre": a.nombre, "puntaje_maximo": a.puntaje_maximo, "dimension_id": str(a.dimension_id) if a.dimension_id else None, "dimension_nombre": a.dimension.nombre if a.dimension_id else None, "fecha": a.fecha})
 
     return Response({"actividades": acts}, status=200)
+
+
+@api_view(["DELETE"])
+def actividad_delete_view(request, actividad_id):
+    usuario = getattr(request, "usuario", None)
+    if usuario is None:
+        return Response({"error": "No autorizado"}, status=401)
+
+    actividad = Actividades.objects.filter(id=actividad_id).select_related("asignacion").first()
+    if not actividad:
+        return Response({"error": "Actividad no encontrada"}, status=404)
+
+    assigned = AccessControlService().get_assigned_assignment_ids(usuario)
+    asignacion_id = str(actividad.asignacion_id)
+    if not (AccessControlService().can_view_all_academic_data(usuario) or (asignacion_id in assigned)):
+        return Response({"error": "No tienes permisos para eliminar esta actividad"}, status=403)
+
+    ActividadNotas.objects.filter(actividad_id=actividad.id).delete()
+    actividad.delete()
+
+    return Response({"mensaje": "Actividad eliminada"}, status=200)
 
 
 @api_view(["POST"])
@@ -546,6 +611,28 @@ def actividades_notas_estudiante_view(request):
         result[str(an.actividad_id)] = an.valor
 
     return Response({"notas": result}, status=200)
+
+
+@api_view(["GET"])
+def reports_download_view(request):
+    usuario = getattr(request, "usuario", None)
+    if usuario is None:
+        return Response({"error": "No autorizado"}, status=401)
+
+    periodo_id = request.query_params.get("periodo_id") or request.query_params.get("periodo")
+    trimestre = request.query_params.get("trimestre")
+    kwargs = {"periodo_id": periodo_id}
+    if trimestre:
+        kwargs["trimestre"] = trimestre
+    document_bytes = ReportsService().build_report_document(usuario, **kwargs)
+    filename = f"informe_reporte_{timezone.localdate().strftime('%Y%m%d')}.docx"
+
+    response = HttpResponse(
+        document_bytes,
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
 
 
 @api_view(["GET"])
