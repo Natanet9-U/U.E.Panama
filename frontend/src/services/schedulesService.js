@@ -19,3 +19,18 @@ export async function getSchedulesPage({ gradoId = "" } = {}) {
       throw error;
     });
 }
+
+export async function createSchedule(payload) {
+  const response = await apiClient.post("/schedules/", payload);
+  return response.data;
+}
+
+export async function updateSchedule(scheduleId, payload) {
+  const response = await apiClient.put(`/schedules/${scheduleId}/`, payload);
+  return response.data;
+}
+
+export async function deleteSchedule(scheduleId) {
+  const response = await apiClient.delete(`/schedules/${scheduleId}/`);
+  return response.data;
+}

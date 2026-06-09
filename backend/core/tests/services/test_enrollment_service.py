@@ -1,119 +1,142 @@
-"""Tests para EnrollmentService"""
-from uuid import uuid4
-
 import pytest
+from django.contrib.auth.hashers import make_password
 
-from core.models import Areas, DocenteAsignacion, Docentes, Estudiantes, Grados, Notas, Periodos, Tutores, Roles, UsuarioRoles
+from core.models import (
+    Areas, Cursos, Estudiantes, Grados, Inscripciones, Niveles,
+    Paralelos, Roles, Tutores, Usuarios,
+)
 from core.services.enrollment_service import EnrollmentService
-from core.tests.factories.user_factory import UsuarioFactory
 
 
 @pytest.mark.django_db
 class TestEnrollmentService:
-    """Tests para el servicio de matriculas"""
 
-    def setup_method(self):
-        self.service = EnrollmentService()
-
-    def test_search_existing_student_returns_payload(self):
-        grado = Grados.objects.create(id=uuid4(), nivel="Primaria", numero=1, paralelo="A", gestion=2026)
-        estudiante = Estudiantes.objects.create(
-            id=uuid4(),
-            usuario=UsuarioFactory(),
-            grado=grado,
-            primer_apellido="Perez",
-            nombres="Ana",
-            ci="CI-100",
-            rude="CI-100",
+    @pytest.fixture
+    def setup(self):
+        roles = {r.nombre: r for r in Roles.objects.bulk_create([
+            Roles(nombre='director'), Roles(nombre='secretaria'), Roles(nombre='docente'),
+        ])}
+        usuario = Usuarios.objects.create(
+            nombre='Sec', email='sec@test.com',
+            password_hash=make_password('123456'), rol=roles['secretaria'],
         )
+        inicial = Niveles.objects.create(nombre='Inicial')
+        grado = Grados.objects.create(nivel=inicial, nombre='Primero', numero=1)
+        paralelo = Paralelos.objects.create(nombre='A')
+        curso = Cursos.objects.create(grado=grado, paralelo=paralelo, gestion=2026)
+        return {'usuario': usuario, 'curso': curso, 'grado': grado}
 
-        payload = self.service.search_existing_student("CI-100")
+    def test_search_existing_student_not_found(self, setup):
+        result = EnrollmentService().search_existing_student(setup['usuario'], 'NOEXIST')
+        assert result is None
 
-        assert payload["id"] == str(estudiante.id)
-        assert payload["activo"] is True
+    def test_enroll_new_student(self, setup):
+        result = EnrollmentService().enroll_new_student(setup['usuario'], {
+            'estudiante': {
+                'rude': 'RUD001', 'ci': '12345678',
+                'nombres': 'Juan', 'primer_apellido': 'Perez',
+            },
+            'curso_id': setup['curso'].id,
+            'gestion': 2026,
+        })
+        assert result['mensaje'] == 'Estudiante inscrito exitosamente'
+        assert Inscripciones.objects.count() == 1
 
-    def test_search_existing_student_missing_returns_none(self):
-        assert self.service.search_existing_student("CI-NO-EXISTE") is None
+    def test_enroll_with_tutor(self, setup):
+        result = EnrollmentService().enroll_new_student(setup['usuario'], {
+            'estudiante': {
+                'rude': 'RUD002', 'ci': '87654321',
+                'nombres': 'Maria', 'primer_apellido': 'Lopez',
+            },
+            'tutor': {
+                'ci': '11111111', 'nombres': 'Padre',
+                'primer_apellido': 'Tutor', 'celular': '77700000',
+            },
+            'curso_id': setup['curso'].id,
+            'gestion': 2026,
+        })
+        assert Tutores.objects.count() == 1
 
-    def test_enroll_new_student_success_creates_notas(self):
-        creator = UsuarioFactory()
-        grado = Grados.objects.create(id=uuid4(), nivel="Secundaria", numero=2, paralelo="B", gestion=2026)
-        area = Areas.objects.create(id=uuid4(), nombre="Ciencias")
-        docente = Docentes.objects.create(id=uuid4(), usuario=UsuarioFactory())
-        DocenteAsignacion.objects.create(id=uuid4(), docente=docente, grado=grado, area=area)
-        Periodos.objects.create(
-            id=uuid4(),
-            nombre="P1",
-            numero=1,
-            gestion=2026,
-            fecha_inicio="2026-01-01",
-            fecha_fin="2026-03-31",
-            activo=True,
+    def test_re_enroll_student(self, setup):
+        EnrollmentService().enroll_new_student(setup['usuario'], {
+            'estudiante': {
+                'rude': 'RUD003', 'ci': '55555555',
+                'nombres': 'Test', 'primer_apellido': 'Reinscripcion',
+            },
+            'curso_id': setup['curso'].id,
+            'gestion': 2026,
+        })
+        result = EnrollmentService().re_enroll_existing_student(
+            setup['usuario'], 'RUD003', setup['curso'].id
         )
-        Roles.objects.create(id=uuid4(), nombre="Estudiante")
+        assert 'reinscrito' in result['mensaje']
 
-        with pytest.MonkeyPatch.context() as monkeypatch:
-            monkeypatch.setattr(self.service.access_service, "can_create_academic_data", lambda u: True)
-            payload = self.service.enroll_new_student(
-                creator,
-                {
-                    "rude": "CI-200",
-                    "nombres": "Laura",
-                    "primer_apellido": "Mendez",
-                    "ci": "CI-200",
-                    "email": "laura@test.com",
-                    "grado_id": grado.id,
-                    "password": "Secret123",
-                },
-            )
+    def test_get_catalogs(self, setup):
+        catalogs = EnrollmentService().get_enrollment_catalogs(setup['usuario'])
+        assert 'grados' in catalogs
+        assert 'cursos' in catalogs
+        assert len(catalogs['grados']) >= 1
 
-        assert payload["ci"] == "CI-200"
-        assert Estudiantes.objects.filter(ci="CI-200").exists()
-        assert Notas.objects.filter(estudiante__ci="CI-200").count() == 1
+    def test_search_existing_student_found(self, setup):
+        EnrollmentService().enroll_new_student(setup['usuario'], {
+            'estudiante': {
+                'rude': 'RUDSEARCH', 'ci': '99999999',
+                'nombres': 'Search', 'primer_apellido': 'Test',
+            },
+            'curso_id': setup['curso'].id,
+            'gestion': 2026,
+        })
+        result = EnrollmentService().search_existing_student(setup['usuario'], 'RUDSEARCH')
+        assert result is not None
+        assert result['rude'] == 'RUDSEARCH'
 
-    def test_re_enroll_existing_student_success(self):
-        creator = UsuarioFactory()
-        grado_actual = Grados.objects.create(id=uuid4(), nivel="Primaria", numero=1, paralelo="A", gestion=2026)
-        nuevo_grado = Grados.objects.create(id=uuid4(), nivel="Secundaria", numero=3, paralelo="C", gestion=2026)
-        area = Areas.objects.create(id=uuid4(), nombre="Arte")
-        docente = Docentes.objects.create(id=uuid4(), usuario=UsuarioFactory())
-        DocenteAsignacion.objects.create(id=uuid4(), docente=docente, grado=nuevo_grado, area=area)
-        Periodos.objects.create(
-            id=uuid4(),
-            nombre="P1",
-            numero=1,
-            gestion=2026,
-            fecha_inicio="2026-01-01",
-            fecha_fin="2026-03-31",
-            activo=True,
+    def test_search_student_permision(self, setup):
+        otro_rol = Roles.objects.get(nombre='docente')
+        otro = Usuarios.objects.create(
+            nombre='Doc', email='doc@test.com',
+            password_hash=make_password('123456'), rol=otro_rol,
         )
-        usuario_estudiante = UsuarioFactory(activo=False)
-        Estudiantes.objects.create(
-            id=uuid4(),
-            usuario=usuario_estudiante,
-            grado=grado_actual,
-            primer_apellido="Perez",
-            nombres="Ana",
-            ci="CI-300",
-            rude="CI-300",
+        with pytest.raises(PermissionError):
+            EnrollmentService().search_existing_student(otro, 'RUD001')
+
+    def test_enroll_permision(self, setup):
+        otro_rol = Roles.objects.get(nombre='docente')
+        otro = Usuarios.objects.create(
+            nombre='Doc2', email='doc2@test.com',
+            password_hash=make_password('123456'), rol=otro_rol,
         )
+        with pytest.raises(PermissionError):
+            EnrollmentService().enroll_new_student(otro, {
+                'estudiante': {'rude': 'RUDX'},
+                'curso_id': setup['curso'].id,
+            })
 
-        with pytest.MonkeyPatch.context() as monkeypatch:
-            monkeypatch.setattr(self.service.access_service, "can_create_academic_data", lambda u: True)
-            payload = self.service.re_enroll_existing_student(creator, "CI-300", nuevo_grado.id)
+    def test_enroll_validation(self, setup):
+        with pytest.raises(ValueError, match='Debe enviar'):
+            EnrollmentService().enroll_new_student(setup['usuario'], {})
 
-        usuario_estudiante.refresh_from_db()
-        assert usuario_estudiante.activo is True
-        assert payload["grado_nuevo"] == "Secundaria 3C"
+    def test_re_enroll_permision(self, setup):
+        otro_rol = Roles.objects.get(nombre='docente')
+        otro = Usuarios.objects.create(
+            nombre='Doc3', email='doc3@test.com',
+            password_hash=make_password('123456'), rol=otro_rol,
+        )
+        with pytest.raises(PermissionError):
+            EnrollmentService().re_enroll_existing_student(otro, 'RUDXXX', 1)
 
-    def test_get_enrollment_catalogs_returns_grades_and_tutors(self):
-        usuario = UsuarioFactory()
-        Grados.objects.create(id=uuid4(), nivel="Primaria", numero=1, paralelo="A", gestion=2026)
-        Tutores.objects.create(id=uuid4(), nombre="Carlos", apellido="Lopez")
+    def test_re_enroll_not_found(self, setup):
+        with pytest.raises(ValueError, match='no encontrado'):
+            EnrollmentService().re_enroll_existing_student(setup['usuario'], 'NOEXIST', 1)
 
-        with pytest.MonkeyPatch.context() as monkeypatch:
-            monkeypatch.setattr(self.service.access_service, "can_create_academic_data", lambda u: True)
-            payload = self.service.get_enrollment_catalogs(usuario)
+    def test_get_catalogs_permision(self, setup):
+        otro_rol = Roles.objects.get(nombre='docente')
+        otro = Usuarios.objects.create(
+            nombre='Doc4', email='doc4@test.com',
+            password_hash=make_password('123456'), rol=otro_rol,
+        )
+        with pytest.raises(PermissionError):
+            EnrollmentService().get_enrollment_catalogs(otro)
 
-        assert len(payload["grados"]) == 1
-        assert len(payload["tutores"]) == 1
+    def test_search_tutor_by_ci(self, setup):
+        result = EnrollmentService().search_tutor_by_ci(setup['usuario'], 'NOEXIST')
+        assert result is None

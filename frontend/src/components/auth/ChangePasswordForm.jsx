@@ -16,7 +16,7 @@ function ChangePasswordForm() {
     const hasUpper = /[A-Z]/.test(newPass);
     const hasLower = /[a-z]/.test(newPass);
     const hasNumber = /[0-9]/.test(newPass);
-    const hasSpecial = /[!@#\$%\^&\*]/.test(newPass);
+    const hasSpecial = /[!@#$%^&*]/.test(newPass);
     if (!(hasUpper && hasLower && hasNumber && hasSpecial)) {
       return "La contraseña debe incluir mayúscula, minúscula, número y carácter especial";
     }

@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
-import { searchExistingStudent, searchTutorByCI, enrollNewStudent, reEnrollStudent, getEnrollmentCatalogs } from "../../services/enrollmentService";
+import { useEffect, useState, useCallback } from "react";
+import { searchExistingStudent, searchTutorByCI, enrollNewStudent, reEnrollStudent, getEnrollmentCatalogs, promocionarEstudianteIndividual } from "../../services/enrollmentService";
+import Toast from "../../components/Toast";
 
 const EMPTY_ARRAY = [];
 
@@ -21,7 +22,7 @@ function SearchStudentCard({ estudiante, onSelect }) {
             Grado actual: <span className="font-semibold">{estudiante.grado_actual_nombre || "No asignado"}</span>
           </p>
           <p className="text-xs text-slate-500 mt-1">
-            Estado: {estudiante.activo ? <span className="text-green-600 font-semibold">Activo</span> : <span className="text-yellow-600 font-semibold">Inactivo (disponible para reinscripción)</span>}
+            Estado: {estudiante.estado === "activo" ? <span className="text-green-600 font-semibold">Activo</span> : <span className="text-yellow-600 font-semibold">Inactivo (disponible para reinscripción)</span>}
           </p>
         </div>
         <button
@@ -38,15 +39,25 @@ function SearchStudentCard({ estudiante, onSelect }) {
 
 function EnrollmentPage() {
   const [tab, setTab] = useState("search"); // "search" or "new"
-  const [catalogs, setCatalogs] = useState({ grados: EMPTY_ARRAY, tutores: EMPTY_ARRAY });
-  const [error, setError] = useState("");
+  const [catalogs, setCatalogs] = useState({ grados: EMPTY_ARRAY, cursos: EMPTY_ARRAY, tutores: EMPTY_ARRAY });
+
+  // Promote State (integrated in search tab)
+  const [promoteDestinoCurso, setPromoteDestinoCurso] = useState("");
+  const [promoteDestinoGestion, setPromoteDestinoGestion] = useState(new Date().getFullYear() + 1);
+  const [promoting, setPromoting] = useState(false);
+
+  // Auto-set destino curso when student is reprobado
+  useEffect(() => {
+    if (foundStudent?.estado === "activo" && foundStudent.aprobado === false && foundStudent.curso_actual_id) {
+      setPromoteDestinoCurso(String(foundStudent.curso_actual_id));
+    }
+  }, [foundStudent]);
 
   // Search Tab State
   const [searchCI, setSearchCI] = useState("");
   const [searchLoading, setSearchLoading] = useState(false);
-  const [searchError, setSearchError] = useState("");
   const [foundStudent, setFoundStudent] = useState(null);
-  const [selectedGradoForReEnroll, setSelectedGradoForReEnroll] = useState("");
+  const [selectedCursoForReEnroll, setSelectedCursoForReEnroll] = useState("");
   const [reEnrolling, setReEnrolling] = useState(false);
 
   // New Enrollment Tab State
@@ -58,12 +69,19 @@ function EnrollmentPage() {
     ci: "",
     fecha_nacimiento: "",
     genero: "",
-    grado_id: "",
+    curso_id: "",
     tutor_data: null,
   });
   const [newLoading, setNewLoading] = useState(false);
-  const [newError, setNewError] = useState("");
-  const [newSuccess, setNewSuccess] = useState("");
+  const [toast, setToast] = useState({ mensaje: "", tipo: "success" });
+
+  const showToast = useCallback((tipo, mensaje) => {
+    setToast({ mensaje, tipo });
+  }, []);
+
+  const closeToast = useCallback(() => {
+    setToast({ mensaje: "", tipo: "success" });
+  }, []);
 
   // Tutor Search State
   const [tutorSearchCI, setTutorSearchCI] = useState("");
@@ -71,7 +89,7 @@ function EnrollmentPage() {
   const [foundTutor, setFoundTutor] = useState(null);
   const [tutorFormData, setTutorFormData] = useState({
     nombre: "",
-    apellido: "",
+    primer_apellido: "",
     ci: "",
     telefono: "",
     ocupacion: "",
@@ -86,11 +104,10 @@ function EnrollmentPage() {
       .then((response) => {
         if (!mounted) return;
         setCatalogs(response);
-        setError("");
       })
       .catch((err) => {
         if (!mounted) return;
-        setError(err?.response?.data?.error || "No fue posible cargar los catálogos");
+        showToast("error", err?.response?.data?.error || "No fue posible cargar los catálogos");
       });
 
     return () => {
@@ -101,51 +118,48 @@ function EnrollmentPage() {
   const handleSearchChange = (e) => {
     setSearchCI(e.target.value);
     setFoundStudent(null);
-    setSearchError("");
   };
 
   const handleSearchStudent = async () => {
     if (!searchCI.trim()) {
-      setSearchError("Debes ingresar un R.U.D.E.");
+      showToast("error", "Debes ingresar un C.I. o R.U.D.E.");
       return;
     }
 
     setSearchLoading(true);
-    setSearchError("");
     setFoundStudent(null);
 
     try {
       const resultado = await searchExistingStudent(searchCI.trim());
       if (resultado.encontrado) {
         setFoundStudent(resultado.estudiante);
-        setSelectedGradoForReEnroll("");
+        setSelectedCursoForReEnroll("");
       } else {
-        setSearchError("No se encontró estudiante con ese R.U.D.E. Usa la sección de Inscripción Nueva.");
+        showToast("error", "No se encontró estudiante con ese C.I. Usa la sección de Inscripción Nueva.");
       }
     } catch (err) {
-      setSearchError(err?.response?.data?.error || "Error al buscar estudiante");
+      showToast("error", err?.response?.data?.error || "Error al buscar estudiante");
     } finally {
       setSearchLoading(false);
     }
   };
 
   const handleReEnroll = async () => {
-    if (!foundStudent || !selectedGradoForReEnroll) {
-      setSearchError("Debes seleccionar un grado");
+    if (!foundStudent || !selectedCursoForReEnroll) {
+      showToast("error", "Debes seleccionar un curso");
       return;
     }
 
     setReEnrolling(true);
-    setSearchError("");
 
     try {
-      const resultado = await reEnrollStudent(foundStudent.rude || foundStudent.ci, selectedGradoForReEnroll);
+      const resultado = await reEnrollStudent(foundStudent.rude || foundStudent.ci, selectedCursoForReEnroll);
       setFoundStudent(null);
       setSearchCI("");
-      setSelectedGradoForReEnroll("");
-      alert(`✅ ${resultado.mensaje}`);
+      setSelectedCursoForReEnroll("");
+      showToast("success", resultado.mensaje);
     } catch (err) {
-      setSearchError(err?.response?.data?.error || "Error al reinscribir");
+      showToast("error", err?.response?.data?.error || "Error al reinscribir");
     } finally {
       setReEnrolling(false);
     }
@@ -154,7 +168,6 @@ function EnrollmentPage() {
   const handleNewFormChange = (e) => {
     const { name, value } = e.target;
     setNewForm((current) => ({ ...current, [name]: value }));
-    setNewError("");
   };
 
   const handleTutorFormChange = (e) => {
@@ -177,7 +190,7 @@ function EnrollmentPage() {
         setShowTutorForm(false);
       } else {
         setFoundTutor(null);
-        setTutorFormData({ nombre: "", apellido: "", ci, telefono: "", ocupacion: "", direccion: "" });
+        setTutorFormData({ nombre: "", primer_apellido: "", ci, telefono: "", ocupacion: "", direccion: "" });
         setShowTutorForm(true);
       }
     } catch (err) {
@@ -190,7 +203,7 @@ function EnrollmentPage() {
   const handleAddNewTutor = () => {
     const { nombre, ci } = tutorFormData;
     if (!nombre.trim() || !ci.trim()) {
-      alert("Debes ingresar el nombre y CI del tutor");
+      showToast("error", "Debes ingresar el nombre y CI del tutor");
       return;
     }
     setFoundTutor(tutorFormData);
@@ -203,24 +216,22 @@ function EnrollmentPage() {
     setFoundTutor(null);
     setTutorSearchCI("");
     setShowTutorForm(false);
-    setTutorFormData({ nombre: "", apellido: "", ci: "", telefono: "", ocupacion: "", direccion: "" });
+    setTutorFormData({ nombre: "", primer_apellido: "", ci: "", telefono: "", ocupacion: "", direccion: "" });
     setNewForm((current) => ({ ...current, tutor_data: null }));
   };
 
   const handleEnrollNew = async (e) => {
     e.preventDefault();
-    if (!newForm.nombres || !newForm.primer_apellido || !newForm.rude || !newForm.ci || !newForm.grado_id) {
-      setNewError("Debes llenar: nombres, primer apellido, R.U.D.E., documento de identidad y grado");
+    if (!newForm.nombres || !newForm.primer_apellido || !newForm.rude || !newForm.ci || !newForm.curso_id) {
+      showToast("error", "Debes llenar: nombres, primer apellido, RUDE, documento de identidad y curso");
       return;
     }
 
     setNewLoading(true);
-    setNewError("");
-    setNewSuccess("");
 
     try {
       const resultado = await enrollNewStudent(newForm);
-      setNewSuccess(resultado.mensaje);
+      showToast("success", resultado.mensaje);
       setNewForm({
         nombres: "",
         primer_apellido: "",
@@ -229,13 +240,12 @@ function EnrollmentPage() {
         ci: "",
         fecha_nacimiento: "",
         genero: "",
-        grado_id: "",
+        curso_id: "",
         tutor_data: null,
       });
       handleClearTutor();
-      setTimeout(() => setNewSuccess(""), 5000);
     } catch (err) {
-      setNewError(err?.response?.data?.error || "Error al inscribir estudiante");
+      showToast("error", err?.response?.data?.error || "Error al inscribir estudiante");
     } finally {
       setNewLoading(false);
     }
@@ -244,6 +254,7 @@ function EnrollmentPage() {
   return (
 
     <section className="space-y-6">
+      <Toast mensaje={toast.mensaje} tipo={toast.tipo} onClose={closeToast} />
       <header className="rounded-[2rem] border border-slate-200 bg-[linear-gradient(135deg,rgba(99,102,241,0.08),rgba(255,255,255,0.94),rgba(14,165,233,0.05))] p-8 shadow-[0_18px_70px_rgba(15,23,42,0.05)]">
         <div>
           <p className="text-sm font-semibold uppercase tracking-[0.35em] text-slate-400">U.E.Panama</p>
@@ -259,9 +270,9 @@ function EnrollmentPage() {
           <p className="text-xs font-semibold uppercase tracking-[0.3em] text-blue-600">Puntos clave</p>
           <h2 className="mt-2 text-lg font-bold text-slate-950">Inscripción y reinscripción</h2>
           <ul className="mt-4 space-y-2 text-sm leading-6 text-slate-700">
-            <li>• Para buscar o reinscribir a un estudiante ahora se usa el R.U.D.E.</li>
+            <li>• Para buscar o reinscribir a un estudiante ingresa su C.I.</li>
             <li>• Si el estudiante ya existe, el sistema lo detecta y permite reinscribirlo solo si está inactivo.</li>
-            <li>• En la inscripción nueva debes completar nombres, primer apellido, R.U.D.E. y grado.</li>
+            <li>• En la inscripción nueva debes completar nombres, primer apellido, RUDE y grado.</li>
             <li>• También puedes buscar un tutor existente o registrar uno nuevo antes de guardar.</li>
           </ul>
         </div>
@@ -273,15 +284,12 @@ function EnrollmentPage() {
         </div>
       </div>
 
-      {error && <div className="rounded-3xl border border-red-200 bg-red-50 px-5 py-4 text-sm font-medium text-red-700">{error}</div>}
-
       <div className="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-[0_18px_50px_rgba(15,23,42,0.05)]">
         <div className="flex gap-4 border-b border-slate-100">
           <button
             type="button"
             onClick={() => {
               setTab("search");
-              setSearchError("");
             }}
             className={`px-4 py-3 font-semibold transition ${
               tab === "search"
@@ -295,7 +303,6 @@ function EnrollmentPage() {
             type="button"
             onClick={() => {
               setTab("new");
-              setNewError("");
             }}
             className={`px-4 py-3 font-semibold transition ${
               tab === "new"
@@ -312,15 +319,18 @@ function EnrollmentPage() {
           <div className="mt-6 space-y-6">
             <div>
               <label className="block text-sm font-semibold text-slate-700 mb-2">
-                Buscar Estudiante por R.U.D.E.
+                Buscar Estudiante por C.I., R.U.D.E. o Nombre
               </label>
+              <p className="text-xs text-slate-500 mb-3">
+                Ingresa el C.I., R.U.D.E. o nombre del estudiante. Si está activo, podrás ver su curso actual y promoverlo al siguiente nivel.
+              </p>
               <p className="text-xs text-slate-500 mb-3">
                 Si el estudiante ya fue inscrito anteriormente (y está inactivo), puedes reinscribirlo aquí.
               </p>
               <div className="flex gap-3">
                 <input
                   type="text"
-                  placeholder="Ingresa el R.U.D.E. del estudiante"
+                  placeholder="Ingresa el C.I. del estudiante"
                   value={searchCI}
                   onChange={handleSearchChange}
                   className="flex-1 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-blue-300"
@@ -336,12 +346,6 @@ function EnrollmentPage() {
               </div>
             </div>
 
-            {searchError && (
-              <div className="rounded-2xl border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm text-yellow-800">
-                {searchError}
-              </div>
-            )}
-
             {foundStudent && (
               <div className="space-y-4 p-4 rounded-2xl border border-blue-200 bg-blue-50">
                 <SearchStudentCard
@@ -349,27 +353,27 @@ function EnrollmentPage() {
                   onSelect={() => {}}
                 />
 
-                {!foundStudent.activo && (
+                {foundStudent.estado !== "activo" && (
                   <div className="space-y-3">
                     <label className="block text-sm font-semibold text-slate-700">
-                      Selecciona el nuevo grado para reinscripción:
+                      Selecciona el nuevo curso para reinscripción:
                     </label>
                     <select
-                      value={selectedGradoForReEnroll}
-                      onChange={(e) => setSelectedGradoForReEnroll(e.target.value)}
+                      value={selectedCursoForReEnroll}
+                      onChange={(e) => setSelectedCursoForReEnroll(e.target.value)}
                       className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none"
                     >
-                      <option value="">Selecciona un grado...</option>
-                      {catalogs.grados.map((g) => (
-                        <option key={g.id} value={g.id}>
-                          {g.nombre}
+                      <option value="">Selecciona un curso...</option>
+                      {(catalogs.cursos || catalogs.grados).map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.nombre}
                         </option>
                       ))}
                     </select>
                     <button
                       type="button"
                       onClick={handleReEnroll}
-                      disabled={reEnrolling || !selectedGradoForReEnroll}
+                      disabled={reEnrolling || !selectedCursoForReEnroll}
                       className="w-full rounded-2xl bg-green-600 px-4 py-3 text-sm font-bold text-white hover:bg-green-700 disabled:opacity-50"
                     >
                       {reEnrolling ? "Reinscribiendo..." : "✅ Reinscribir"}
@@ -377,9 +381,139 @@ function EnrollmentPage() {
                   </div>
                 )}
 
-                {foundStudent.activo && (
-                  <div className="rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
-                    ⚠️ Este estudiante ya está activo en el sistema. No necesita reinscripción.
+                {foundStudent.estado === "activo" && (
+                  <div className="space-y-4">
+                    <div className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+                      <p className="font-semibold">
+                        📘 Curso actual: <span className="text-blue-900">{foundStudent.curso_actual || "Sin asignar"}</span>
+                        <span className="ml-3 text-slate-500">(Gestión {foundStudent.gestion_actual})</span>
+                      </p>
+                      {foundStudent.aprobado === true && (
+                        <p className="mt-1 font-semibold text-green-700">
+                          ✅ APROBADO — Promedio general: {foundStudent.promedio_general}
+                        </p>
+                      )}
+                      {foundStudent.aprobado === false && (
+                        <p className="mt-1 font-semibold text-red-600">
+                          ❌ REPROBADO — Promedio general: {foundStudent.promedio_general}
+                        </p>
+                      )}
+                      {foundStudent.aprobado === null && (
+                        <p className="mt-1 text-slate-500">
+                          ⏳ Sin calificaciones registradas para esta gestión
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="border-t border-blue-100 pt-4">
+                      {foundStudent.aprobado === false ? (
+                        <div>
+                          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 mb-3">
+                            ⚠️ El estudiante ha <strong>REPROBADO</strong> el curso actual. Debe <strong>repetir el curso</strong> en la próxima gestión.
+                          </div>
+                          <input type="hidden" value={promoteDestinoCurso} />
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            <div className="rounded-xl border border-slate-200 bg-slate-100 px-4 py-2.5 text-sm text-slate-600">
+                              {foundStudent.curso_actual} (repetición)
+                            </div>
+                            <input
+                              type="number"
+                              placeholder="Gestión destino"
+                              value={promoteDestinoGestion}
+                              onChange={(e) => setPromoteDestinoGestion(parseInt(e.target.value) || new Date().getFullYear() + 1)}
+                              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm outline-none focus:border-blue-500"
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (!window.confirm(
+                                `¿Inscribir a ${foundStudent.nombres} ${foundStudent.primer_apellido || ""} para repetir ${foundStudent.curso_actual} (gestión ${promoteDestinoGestion})?\n\n` +
+                                `Curso actual: ${foundStudent.curso_actual} (Gestión ${foundStudent.gestion_actual})\n` +
+                                `Estado: REPROBADO - Promedio: ${foundStudent.promedio_general || "N/A"}`
+                              )) return;
+                              setPromoting(true);
+                              try {
+                                const result = await promocionarEstudianteIndividual(
+                                  foundStudent.id,
+                                  promoteDestinoCurso,
+                                  promoteDestinoGestion
+                                );
+                                setToast({ mensaje: result.mensaje || "Inscripción para repetición exitosa", tipo: "success" });
+                                setFoundStudent(null);
+                                setSearchCI("");
+                              } catch (err) {
+                                setToast({ mensaje: err.response?.data?.error || "Error al inscribir", tipo: "error" });
+                              } finally {
+                                setPromoting(false);
+                              }
+                            }}
+                            disabled={promoting}
+                            className="mt-3 w-full rounded-xl bg-amber-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-amber-700 disabled:opacity-50"
+                          >
+                            {promoting ? "Inscribiendo..." : "🔄 Repetir curso"}
+                          </button>
+                        </div>
+                      ) : (
+                        <div>
+                          <label className="block text-sm font-semibold text-slate-700 mb-1.5">
+                            Curso destino para promoción:
+                          </label>
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            <select
+                              value={promoteDestinoCurso}
+                              onChange={(e) => setPromoteDestinoCurso(e.target.value)}
+                              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm outline-none focus:border-blue-500"
+                            >
+                              <option value="">Selecciona un curso...</option>
+                              {(catalogs.cursos || catalogs.grados).map((c) => (
+                                <option key={c.id} value={c.id}>{c.nombre}</option>
+                              ))}
+                            </select>
+                            <input
+                              type="number"
+                              placeholder="Gestión destino"
+                              value={promoteDestinoGestion}
+                              onChange={(e) => setPromoteDestinoGestion(parseInt(e.target.value) || new Date().getFullYear() + 1)}
+                              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm outline-none focus:border-blue-500"
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (!promoteDestinoCurso) {
+                                setToast({ mensaje: "Selecciona un curso de destino", tipo: "error" });
+                                return;
+                              }
+                              if (!window.confirm(
+                                `¿Promocionar a ${foundStudent.nombres} ${foundStudent.primer_apellido || ""} al curso seleccionado (gestión ${promoteDestinoGestion})?\n\n` +
+                                `Curso actual: ${foundStudent.curso_actual} (Gestión ${foundStudent.gestion_actual})\n` +
+                                `Estado: APROBADO - Promedio: ${foundStudent.promedio_general || "N/A"}`
+                              )) return;
+                              setPromoting(true);
+                              try {
+                                const result = await promocionarEstudianteIndividual(
+                                  foundStudent.id,
+                                  promoteDestinoCurso,
+                                  promoteDestinoGestion
+                                );
+                                setToast({ mensaje: result.mensaje || "Promoción exitosa", tipo: "success" });
+                                setFoundStudent(null);
+                                setSearchCI("");
+                              } catch (err) {
+                                setToast({ mensaje: err.response?.data?.error || "Error al promocionar", tipo: "error" });
+                              } finally {
+                                setPromoting(false);
+                              }
+                            }}
+                            disabled={promoting || !promoteDestinoCurso}
+                            className="mt-3 w-full rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-bold text-white hover:bg-slate-800 disabled:opacity-50"
+                          >
+                            {promoting ? "Promocionando..." : "📈 Promover al curso seleccionado"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
@@ -390,18 +524,6 @@ function EnrollmentPage() {
         {/* New Enrollment Tab */}
         {tab === "new" && (
           <form onSubmit={handleEnrollNew} className="mt-6 space-y-6">
-            {newSuccess && (
-              <div className="rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
-                ✅ {newSuccess}
-              </div>
-            )}
-
-            {newError && (
-              <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-                {newError}
-              </div>
-            )}
-
             <div className="grid gap-4 md:grid-cols-2">
               <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-2">
@@ -504,18 +626,18 @@ function EnrollmentPage() {
 
               <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-2">
-                  Grado *
+                  Curso *
                 </label>
                 <select
-                  name="grado_id"
-                  value={newForm.grado_id}
+                  name="curso_id"
+                  value={newForm.curso_id}
                   onChange={handleNewFormChange}
                   className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-blue-300"
                 >
-                  <option value="">Selecciona un grado...</option>
-                  {catalogs.grados.map((g) => (
-                    <option key={g.id} value={g.id}>
-                      {g.nombre}
+                  <option value="">Selecciona un curso...</option>
+                  {(catalogs.cursos || catalogs.grados).map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.nombre}
                     </option>
                   ))}
                 </select>
@@ -580,9 +702,9 @@ function EnrollmentPage() {
                           <label className="text-xs font-semibold text-slate-700">Apellido</label>
                           <input
                             type="text"
-                            name="apellido"
+                            name="primer_apellido"
                             placeholder="Apellido"
-                            value={tutorFormData.apellido}
+                            value={tutorFormData.primer_apellido}
                             onChange={handleTutorFormChange}
                             className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-300"
                           />
@@ -645,7 +767,7 @@ function EnrollmentPage() {
               ) : (
                 <div className="rounded-xl border border-green-200 bg-green-50 p-3">
                   <p className="text-sm font-semibold text-slate-900">
-                    {foundTutor.nombre} {foundTutor.apellido}
+                    {foundTutor.nombre} {foundTutor.primer_apellido}
                   </p>
                   <p className="text-xs text-slate-600">Documento de identidad: {foundTutor.ci}</p>
                   {foundTutor.telefono && <p className="text-xs text-slate-600">Tel: {foundTutor.telefono}</p>}
@@ -672,11 +794,10 @@ function EnrollmentPage() {
                     ci: "",
                     fecha_nacimiento: "",
                     genero: "",
-                    grado_id: "",
+                    curso_id: "",
                     tutor_data: null,
                   });
                   handleClearTutor();
-                  setNewError("");
                 }}
                 className="rounded-2xl border border-slate-200 bg-white px-6 py-3 text-sm font-bold text-slate-900 hover:bg-slate-50"
               >

@@ -4,7 +4,10 @@ const TOKEN_KEY = "auth_token";
 const USER_KEY = "auth_user";
 
 export async function loginRequest(email, password) {
-  const response = await apiClient.post("/auth/login/", { email, password });
+  const response = await apiClient.post("/auth/login/", {
+    email: String(email || "").trim().toLowerCase(),
+    password: String(password || "").trim(),
+  });
   const { token, usuario } = response.data;
 
   localStorage.setItem(TOKEN_KEY, token);
@@ -40,10 +43,9 @@ export function getStoredUser() {
 }
 
 export function isAuthenticated() {
-  //Poner false para requerir login
-  const DEVELOPMENT_MODE = true;
-  if (DEVELOPMENT_MODE) return true;
-  
+  if (process.env.NODE_ENV === "test") {
+    return true;
+  }
   return Boolean(localStorage.getItem(TOKEN_KEY));
 }
 

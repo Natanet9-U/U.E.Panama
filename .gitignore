@@ -78,3 +78,18 @@ __pycache__/
 *.pyc
 htmlcov/
 .coverage
+coverage.xml
+report.xml
+*.json
+*.txt
+
+# ========================
+# Temporary files
+# ========================
+_verify.py
+add_areas_teachers.py
+debug_*.py
+fix_*.py
+test_*.py
+tmp_*.py
+*.csv

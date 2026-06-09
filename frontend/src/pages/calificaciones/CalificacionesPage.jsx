@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import BarChartMock from "../../components/charts/BarChartMock";
-import PieChartMock from "../../components/charts/PieChartMock";
 import { getGradesPage } from "../../services/gradesService";
+import Toast from "../../components/Toast";
 
 const EMPTY_ARRAY = [];
 
@@ -82,15 +82,16 @@ function CourseDistribution({ items }) {
 function CalificacionesPage() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [toast, setToast] = useState({ mensaje: "", tipo: "success" });
+  function showToast(tipo, mensaje) {
+    setToast({ mensaje, tipo });
+  }
   const [query, setQuery] = useState("");
-  const [periodoId, setPeriodoId] = useState("");
   const [page, setPage] = useState(1);
   const [tab, setTab] = useState("resumen");
 
   const resumen = data?.resumen || EMPTY_ARRAY;
   const calificaciones = data?.calificaciones || EMPTY_ARRAY;
-  const periodos = data?.filtros?.periodos || EMPTY_ARRAY;
   const materias = data?.filtros?.materias || EMPTY_ARRAY;
   const promedioPorAsignatura = data?.promedio_por_asignatura || { labels: EMPTY_ARRAY, data: EMPTY_ARRAY };
   const mejoresEstudiantes = data?.mejores_estudiantes || EMPTY_ARRAY;
@@ -99,28 +100,27 @@ function CalificacionesPage() {
   const permisos = data?.permisos || { puede_crear: false, puede_ver_todo: false };
   const paginacion = data?.paginacion || { pagina: 1, paginas: 1, anterior: false, siguiente: false, total: 0 };
 
-  const controls = useMemo(() => ({ query, periodoId, page }), [query, periodoId, page]);
+  const controls = useMemo(() => ({ query, page }), [query, page]);
 
   useEffect(() => {
     let mounted = true;
     setLoading(true);
 
     const timer = window.setTimeout(() => {
-      getGradesPage({ query: controls.query, periodoId: controls.periodoId, page: controls.page, pageSize: 10 })
+      getGradesPage({ query: controls.query, page: controls.page, pageSize: 10 })
         .then((response) => {
           if (!mounted) {
             return;
           }
 
           setData(response);
-          setError("");
         })
         .catch((requestError) => {
           if (!mounted) {
             return;
           }
 
-          setError(requestError?.response?.data?.error || "No fue posible cargar las calificaciones");
+          showToast("error", requestError?.response?.data?.error || "No fue posible cargar las calificaciones");
         })
         .finally(() => {
           if (mounted) {
@@ -137,11 +137,6 @@ function CalificacionesPage() {
 
   const handleSearchChange = (event) => {
     setQuery(event.target.value);
-    setPage(1);
-  };
-
-  const handlePeriodChange = (event) => {
-    setPeriodoId(event.target.value);
     setPage(1);
   };
 
@@ -163,7 +158,7 @@ function CalificacionesPage() {
         </div>
       </header>
 
-      {error ? <div className="rounded-3xl border border-red-200 bg-red-50 px-5 py-4 text-sm font-medium text-red-700">{error}</div> : null}
+      <Toast mensaje={toast.mensaje} tipo={toast.tipo} onClose={() => setToast({ mensaje: "", tipo: "success" })} />
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {resumen.map((item) => (
@@ -180,10 +175,10 @@ function CalificacionesPage() {
       </section>
 
       {tab === "resumen" ? (
-        <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+        <div className="grid gap-6 xl:grid-cols-2">
           <SectionShell title="Promedio por Asignatura" description="Vista agregada de las notas visibles">
             <div className="h-80 rounded-3xl border border-slate-100 bg-slate-50 p-4">
-              <BarChartMock data={promedioPorAsignatura.data} labels={promedioPorAsignatura.labels} color="#3b82f6" />
+              <BarChartMock data={promedioPorAsignatura.data} labels={promedioPorAsignatura.labels} color="#8b5cf6" />
             </div>
           </SectionShell>
 
@@ -227,14 +222,7 @@ function CalificacionesPage() {
                   className="w-full min-w-[280px] rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm outline-none transition focus:border-blue-300 focus:bg-white"
                 />
               </div>
-              <select
-                value={periodoId}
-                onChange={handlePeriodChange}
-                className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 outline-none transition focus:border-blue-300 focus:bg-white"
-              >
-                <option value="">Todos los periodos</option>
-                {periodos.map((periodo) => <option key={periodo.id} value={periodo.id}>{periodo.nombre}</option>)}
-              </select>
+
             </div>
           )}
         >
@@ -244,10 +232,11 @@ function CalificacionesPage() {
                 <thead className="bg-slate-50">
                   <tr>
                     <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-600">Estudiante</th>
-                    {(materias.length ? materias : ["Matemáticas", "Lenguaje", "Ciencias", "Historia", "Inglés"]).map((materia) => (
+                    {materias.map((materia) => (
                       <th key={materia} className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-600">{materia}</th>
                     ))}
                     <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-600">Promedio</th>
+                    <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-600">Asistencia</th>
                     <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide text-slate-600">Tendencia</th>
                   </tr>
                 </thead>
@@ -255,7 +244,7 @@ function CalificacionesPage() {
                   {loading ? (
                     Array.from({ length: 5 }).map((_, index) => (
                       <tr key={index}>
-                        <td className="px-4 py-4" colSpan={(materias.length ? materias.length : 5) + 3}>
+                        <td className="px-4 py-4" colSpan={materias.length + 4}>
                           <div className="h-16 animate-pulse rounded-2xl bg-slate-100" />
                         </td>
                       </tr>
@@ -267,16 +256,25 @@ function CalificacionesPage() {
                           <p className="text-sm font-semibold text-slate-900">{item.estudiante}</p>
                           <p className="text-xs text-slate-500">ID: {item.documento}</p>
                         </td>
-                        {(materias.length ? materias : ["Matemáticas", "Lenguaje", "Ciencias", "Historia", "Inglés"]).map((materia) => (
+                        {materias.map((materia) => (
                           <td key={materia} className="px-4 py-4 text-sm font-medium text-slate-700">{item.materias[materia] ?? "-"}</td>
                         ))}
                         <td className="px-4 py-4 text-sm font-black text-blue-600">{item.promedio}</td>
+                        <td className="px-4 py-4">
+                          <span className={`inline-flex rounded-full px-3 py-1 text-xs font-bold ${
+                            item.asistencia >= 80 ? "bg-emerald-50 text-emerald-700" :
+                            item.asistencia >= 60 ? "bg-amber-50 text-amber-700" :
+                            "bg-red-50 text-red-700"
+                          }`}>
+                            {item.asistencia}%
+                          </span>
+                        </td>
                         <td className="px-4 py-4"><StudentBadge value={item.tendencia} /></td>
                       </tr>
                     ))
                   ) : (
                     <tr>
-                      <td className="px-4 py-10 text-center text-sm text-slate-500" colSpan={(materias.length ? materias.length : 5) + 3}>
+                      <td className="px-4 py-10 text-center text-sm text-slate-500" colSpan={materias.length + 4}>
                         No se encontraron calificaciones para mostrar.
                       </td>
                     </tr>
@@ -298,7 +296,7 @@ function CalificacionesPage() {
       ) : null}
 
       {tab === "curso" ? (
-        <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+        <div className="grid gap-6 xl:grid-cols-2">
           <SectionShell title="Promedio por Curso" description="Distribución de rendimiento y promedio general">
             <div className="grid gap-4 lg:grid-cols-2">
               {topCourseCards.map((course) => (
@@ -320,18 +318,28 @@ function CalificacionesPage() {
 
           <SectionShell title="Promedio por Asignatura" description="Comparativa global visible">
             <div className="h-80 rounded-3xl border border-slate-100 bg-slate-50 p-4">
-              <BarChartMock data={promedioPorAsignatura.data} labels={promedioPorAsignatura.labels} color="#3b82f6" />
+              <BarChartMock data={promedioPorAsignatura.data} labels={promedioPorAsignatura.labels} color="#8b5cf6" />
             </div>
-            <div className="mt-6 rounded-3xl border border-slate-100 bg-slate-50 p-4">
-              <PieChartMock
-                title="Rendimiento"
-                segments={[
-                  { label: "Excelente", value: 35, color: "#dcfce7", description: "90 o más" },
-                  { label: "Bueno", value: 45, color: "#dbeafe", description: "80 a 89" },
-                  { label: "En riesgo", value: 15, color: "#ffedd5", description: "70 a 79" },
-                  { label: "Atención", value: 5, color: "#fee2e2", description: "Menos de 70" },
-                ]}
-              />
+            <div className="mt-6 rounded-3xl border border-slate-100 bg-slate-50 p-5">
+              <p className="text-sm font-semibold text-slate-700">Rendimiento de Alumnos</p>
+              {mejoresEstudiantes.length ? (
+                <div className="mt-4 space-y-3">
+                  {mejoresEstudiantes.map((item) => (
+                    <div key={item.id} className="flex items-center justify-between rounded-2xl bg-white px-4 py-3 shadow-sm">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-100 text-sm font-bold text-blue-700">{item.posicion}</div>
+                        <div>
+                          <p className="text-sm font-bold text-slate-950">{item.nombre}</p>
+                          <p className="text-xs text-slate-500">Prom: {item.promedio}</p>
+                        </div>
+                      </div>
+                      <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">{item.detalle}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-2 text-sm text-slate-500">Sin datos de rendimiento disponibles.</p>
+              )}
             </div>
           </SectionShell>
         </div>

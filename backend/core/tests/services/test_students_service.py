@@ -1,281 +1,364 @@
-"""Tests para StudentsService"""
-from types import SimpleNamespace
-from unittest.mock import MagicMock
-from uuid import uuid4
-
 import pytest
+from django.contrib.auth.hashers import make_password
 
-from core.models import Grados, Periodos, Roles, Usuarios
+from core.models import Estudiantes, Roles, Usuarios, Docentes, Niveles, Grados, Paralelos, Cursos, Areas, DocenteAsignacion, Inscripciones, Tutores, EstudianteTutor
 from core.services.students_service import StudentsService
-from core.tests.factories.student_factory import EstudianteFactory
-from core.tests.factories.user_factory import UsuarioFactory
 
 
-class FakeQueryset:
-    def __init__(self, items):
-        self.items = items
-
-    def select_related(self, *args, **kwargs):
-        return self
-
-    def order_by(self, *args, **kwargs):
-        return self
-
-    def filter(self, *args, **kwargs):
-        return self
-
-    def count(self):
-        return len(self.items)
-
-    def values_list(self, *args, **kwargs):
-        return [item.id for item in self.items]
-
-    def __getitem__(self, item):
-        return self.items[item]
-
-
+@pytest.mark.django_db
 class TestStudentsService:
-    """Tests para el servicio de estudiantes"""
 
-    def setup_method(self):
-        """Configuración antes de cada test"""
-        self.service = StudentsService()
+    @pytest.fixture
+    def roles(self):
+        return {r.nombre: r for r in Roles.objects.bulk_create([
+            Roles(nombre='director'), Roles(nombre='secretaria'), Roles(nombre='docente'),
+            Roles(nombre='regente'), Roles(nombre='tutor'),
+        ])}
 
-    def test_build_students_page_returns_students(self):
-        """Verifica que build_students_page retorna estudiantes"""
-        estudiante = SimpleNamespace(
-            id="student-1",
-            ci="CI123456",
-            grado=SimpleNamespace(id="grade-1", nivel="1", numero="A", paralelo=""),
-            usuario=SimpleNamespace(email="student@test.com", telefono="123"),
-            nombres="Ana",
-            primer_apellido="Perez",
-            segundo_apellido=None,
-            estado="Activo",
+    @pytest.fixture
+    def users(self, roles):
+        return {
+            'secretaria': Usuarios.objects.create(
+                nombre='Sec', email='sec@test.com',
+                password_hash=make_password('123456'), rol=roles['secretaria'],
+            ),
+            'docente': Usuarios.objects.create(
+                nombre='Doc', email='doc@test.com',
+                password_hash=make_password('123456'), rol=roles['docente'],
+            ),
+            'director': Usuarios.objects.create(
+                nombre='Dir', email='dir@test.com',
+                password_hash=make_password('123456'), rol=roles['director'],
+            ),
+            'regente': Usuarios.objects.create(
+                nombre='Reg', email='reg@test.com',
+                password_hash=make_password('123456'), rol=roles['regente'],
+            ),
+        }
+
+    def test_crear_estudiante(self, users):
+        data = StudentsService().crear(users['secretaria'], {
+            'rude': 'RUD001', 'ci': '12345678',
+            'nombres': 'Juan', 'primer_apellido': 'Perez',
+        })
+        assert data['nombres'] == 'Juan'
+        assert data['estado'] == 'activo'
+
+    def test_crear_estudiante_docente_fails(self, users):
+        with pytest.raises(PermissionError):
+            StudentsService().crear(users['docente'], {
+                'rude': 'RUD002', 'ci': '87654321',
+                'nombres': 'Maria', 'primer_apellido': 'Lopez',
+            })
+
+    def test_listar_estudiantes(self, users):
+        svc = StudentsService()
+        svc.crear(users['secretaria'], {
+            'rude': 'RUD001', 'ci': '11111111',
+            'nombres': 'Juan', 'primer_apellido': 'A',
+        })
+        svc.crear(users['secretaria'], {
+            'rude': 'RUD002', 'ci': '22222222',
+            'nombres': 'Maria', 'primer_apellido': 'B',
+        })
+        result = svc.listar(users['secretaria'])
+        assert result['total'] == 2
+
+    def test_listar_docente_no_permiso(self, users):
+        result = StudentsService().listar(users['docente'])
+        assert result['total'] == 0
+
+    def test_listar_incluir_inactivos_and_page_bounds(self, users):
+        svc = StudentsService()
+        activo = svc.crear(users['secretaria'], {
+            'rude': 'RUDINA1', 'ci': '88888888',
+            'nombres': 'Activo', 'primer_apellido': 'Uno',
+            'segundo_apellido': 'Segundo', 'genero': 'M',
+            'pais_nacimiento': 'Bolivia', 'tiene_discapacidad': True,
+            'tipo_discapacidad': 'Auditiva', 'tiene_tea': False,
+            'dificultad_aprendizaje': 'None',
+        })
+        inactivo = svc.crear(users['secretaria'], {
+            'rude': 'RUDINA2', 'ci': '99999998',
+            'nombres': 'Inactivo', 'primer_apellido': 'Dos',
+        })
+        svc.eliminar(users['secretaria'], inactivo['id'])
+
+        solo_activos = svc.listar(users['secretaria'])
+        assert solo_activos['total'] == 1
+        assert solo_activos['estudiantes'][0]['id'] == activo['id']
+
+        con_inactivos = svc.listar(users['secretaria'], incluir_inactivos=True, page=99, page_size=999)
+        assert con_inactivos['total'] == 2
+        assert con_inactivos['page'] == 1
+        assert con_inactivos['page_size'] == 999
+        assert any(item['estado'] == 'inactivo' for item in con_inactivos['estudiantes'])
+
+    def test_buscar_estudiante(self, users):
+        svc = StudentsService()
+        svc.crear(users['secretaria'], {
+            'rude': 'RUDXXX', 'ci': '99999999',
+            'nombres': 'Buscar', 'primer_apellido': 'Me',
+        })
+        result = svc.listar(users['secretaria'], query='Buscar')
+        assert result['total'] == 1
+
+    def test_eliminar_estudiante(self, users):
+        svc = StudentsService()
+        e = svc.crear(users['secretaria'], {
+            'rude': 'RUDDEL', 'ci': '00000000',
+            'nombres': 'Eliminar', 'primer_apellido': 'Me',
+        })
+        svc.eliminar(users['secretaria'], e['id'])
+        estudiante = Estudiantes.objects.get(id=e['id'])
+        assert estudiante.estado == 'inactivo'
+
+    def test_restaurar_estudiante(self, users):
+        svc = StudentsService()
+        e = svc.crear(users['secretaria'], {
+            'rude': 'RUDRES', 'ci': '10101010',
+            'nombres': 'Restaurar', 'primer_apellido': 'Me',
+        })
+        svc.eliminar(users['secretaria'], e['id'])
+        restored = svc.restaurar(users['secretaria'], e['id'])
+        assert restored['estado'] == 'activo'
+
+    def test_restaurar_permision(self, users):
+        svc = StudentsService()
+        e = svc.crear(users['secretaria'], {
+            'rude': 'RUDRES2', 'ci': '12121212',
+            'nombres': 'NoRest', 'primer_apellido': 'Test',
+        })
+        svc.eliminar(users['secretaria'], e['id'])
+        with pytest.raises(PermissionError):
+            svc.restaurar(users['docente'], e['id'])
+
+    def test_obtener_estudiante(self, users):
+        svc = StudentsService()
+        e = svc.crear(users['secretaria'], {
+            'rude': 'RUDO01', 'ci': '11111111',
+            'nombres': 'Obtener', 'primer_apellido': 'Test',
+        })
+        result = svc.obtener(users['secretaria'], e['id'])
+        assert result['nombres'] == 'Obtener'
+
+    def test_obtener_permision(self, users):
+        svc = StudentsService()
+        e = svc.crear(users['secretaria'], {
+            'rude': 'RUDO02', 'ci': '22222222',
+            'nombres': 'NoPerm', 'primer_apellido': 'Test',
+        })
+        with pytest.raises(PermissionError):
+            svc.obtener(users['docente'], e['id'])
+
+    def test_actualizar_estudiante(self, users):
+        svc = StudentsService()
+        e = svc.crear(users['secretaria'], {
+            'rude': 'RUDA01', 'ci': '33333333',
+            'nombres': 'Original', 'primer_apellido': 'Test',
+        })
+        result = svc.actualizar(users['secretaria'], e['id'], {
+            'nombres': 'Actualizado',
+            'ci': '33333334',
+            'rude': 'RUDA02',
+            'segundo_apellido': 'Nuevo',
+            'fecha_nacimiento': '2026-05-01',
+            'genero': 'F',
+            'pais_nacimiento': 'Peru',
+            'tiene_discapacidad': True,
+            'tipo_discapacidad': 'Visual',
+            'tiene_tea': True,
+            'dificultad_aprendizaje': 'Lectura',
+        })
+        assert result['nombres'] == 'Actualizado'
+        assert result['ci'] == '33333334'
+        assert result['rude'] == 'RUDA02'
+        assert result['segundo_apellido'] == 'Nuevo'
+        assert result['fecha_nacimiento'] == '2026-05-01'
+        assert result['genero'] == 'F'
+        assert result['pais_nacimiento'] == 'Peru'
+        assert result['tiene_discapacidad'] is True
+        assert result['tipo_discapacidad'] == 'Visual'
+        assert result['tiene_tea'] is True
+        assert result['dificultad_aprendizaje'] == 'Lectura'
+
+    def test_actualizar_permision(self, users):
+        svc = StudentsService()
+        e = svc.crear(users['secretaria'], {
+            'rude': 'RUDA02', 'ci': '44444444',
+            'nombres': 'NoEdit', 'primer_apellido': 'Test',
+        })
+        with pytest.raises(PermissionError):
+            svc.actualizar(users['docente'], e['id'], {'nombres': 'Hack'})
+
+    def test_eliminar_permision(self, users):
+        svc = StudentsService()
+        e = svc.crear(users['secretaria'], {
+            'rude': 'RUDEL2', 'ci': '55555555',
+            'nombres': 'NoDel', 'primer_apellido': 'Test',
+        })
+        with pytest.raises(PermissionError):
+            svc.eliminar(users['docente'], e['id'])
+
+    def test_crear_validation(self, users):
+        with pytest.raises(ValueError, match='requeridos'):
+            StudentsService().crear(users['secretaria'], {})
+
+    def test_crear_validation_formats(self, users):
+        svc = StudentsService()
+        with pytest.raises(ValueError, match='RUDE'):
+            svc.crear(users['secretaria'], {
+                'rude': 'bad', 'ci': '12345678', 'nombres': 'X', 'primer_apellido': 'Y',
+            })
+        with pytest.raises(ValueError, match='CI'):
+            svc.crear(users['secretaria'], {
+                'rude': 'RUDOK1', 'ci': 'bad', 'nombres': 'X', 'primer_apellido': 'Y',
+            })
+
+    def test_validar_data_private(self, users):
+        with pytest.raises(ValueError, match='Campos requeridos faltantes'):
+            StudentsService()._validar_data({'rude': 'RUD'})
+
+    def test_listar_por_grado(self, users):
+        from core.models import Cursos, Grados, Niveles, Paralelos
+        from core.services.enrollment_service import EnrollmentService
+        svc = StudentsService()
+        nivel = Niveles.objects.create(nombre='Test')
+        grado = Grados.objects.create(nivel=nivel, nombre='GradoTest', numero=99)
+        paralelo = Paralelos.objects.create(nombre='A')
+        curso = Cursos.objects.create(grado=grado, paralelo=paralelo, gestion=2026)
+        e = svc.crear(users['secretaria'], {
+            'rude': 'RUDG01', 'ci': '66666666',
+            'nombres': 'Grado', 'primer_apellido': 'Test',
+        })
+        EnrollmentService().enroll_new_student(users['secretaria'], {
+            'estudiante': {'rude': 'RUDG01'},
+            'curso_id': curso.id, 'gestion': 2026,
+        })
+        result = svc.listar(users['secretaria'], grado_id=grado.id)
+        assert result['total'] == 1
+
+    def test_listar_docente_con_asignacion(self, users, roles):
+        """Test que un docente ve solo los estudiantes de sus cursos."""
+        svc = StudentsService()
+        
+        # Crear estudiante 1
+        e1 = svc.crear(users['secretaria'], {
+            'rude': 'RUDDS1', 'ci': '77777771',
+            'nombres': 'Estudiante', 'primer_apellido': 'Uno',
+        })
+        
+        # Crear estudiante 2
+        e2 = svc.crear(users['secretaria'], {
+            'rude': 'RUDDS2', 'ci': '77777772',
+            'nombres': 'Estudiante', 'primer_apellido': 'Dos',
+        })
+        
+        # Crear estructura académica
+        nivel = Niveles.objects.create(nombre='Primaria')
+        grado = Grados.objects.create(nivel=nivel, nombre='Primero', numero=1)
+        paralelo = Paralelos.objects.create(nombre='A')
+        curso = Cursos.objects.create(grado=grado, paralelo=paralelo, gestion=2026)
+        area = Areas.objects.create(nombre='Matemáticas')
+        
+        # Crear docente y asignación
+        docente_model = Docentes.objects.create(usuario=users['docente'])
+        da = DocenteAsignacion.objects.create(
+            docente=docente_model, curso=curso, area=area, gestion=2026
         )
-        fake_queryset = FakeQueryset([estudiante])
-
-        self.service.usuario = SimpleNamespace(id="user-1")
-        self.service.access_service.filter_students_queryset = MagicMock(return_value=fake_queryset)
-        self.service.access_service.build_permissions_payload = MagicMock(return_value={"roles": []})
-        self.service._get_periodo_activo = MagicMock(return_value=None)
-        self.service._build_average_map = MagicMock(return_value={"student-1": 95.0})
-        self.service._build_attendance_map = MagicMock(return_value={"student-1": 90})
-        self.service._build_summary = MagicMock(return_value=[])
-        self.service._build_grade_filters = MagicMock(return_value=[])
-
-        result = self.service.build_students_page()
-
-        assert result["estudiantes"][0]["nombre"] == "Ana Perez"
-        assert result["estudiantes"][0]["promedio"] == 95.0
-        assert result["estudiantes"][0]["asistencia"] == 90
-
-    def test_build_students_page_filters_by_query(self):
-        """Verifica que la búsqueda por query funciona"""
-        # EstudianteFactory(nombres="Juan Especial")
-        # result = self.service.build_students_page(query="Juan")
-        # assert len(result) > 0
-
-    def test_build_students_page_pagination(self):
-        """Verifica que la paginación funciona"""
-        # for _ in range(10):
-        #     EstudianteFactory()
-        # 
-        # page1 = self.service.build_students_page(page=1, page_size=5)
-        # page2 = self.service.build_students_page(page=2, page_size=5)
-        # assert len(page1) == 5
-        # assert len(page2) == 5
-
-    def test_build_student_code_uses_ci_then_uuid_prefix(self):
-        estudiante_con_ci = SimpleNamespace(ci="CI123", id=uuid4())
-        estudiante_sin_ci = SimpleNamespace(ci=None, id=uuid4())
-
-        assert self.service._build_student_code(estudiante_con_ci) == "CI123"
-        assert self.service._build_student_code(estudiante_sin_ci) == str(estudiante_sin_ci.id).split("-")[0].upper()
-
-    def test_avatar_and_state_helpers(self):
-        estudiante = SimpleNamespace(nombres="Ana", primer_apellido="Perez", estado=" activo ")
-
-        assert self.service._avatar_label(estudiante) == "AP"
-        assert self.service._normalize_state(None) == "Activo"
-        assert self.service._normalize_state("  inactivo  ") == "Inactivo"
-        assert self.service._is_active(None) is True
-        assert self.service._is_active("Activo") is True
-        assert self.service._is_active("Retirado") is False
-
-    def test_period_and_format_helpers(self):
-        periodo = Periodos(
-            id=uuid4(),
-            nombre="Primer Trimestre",
-            numero=1,
-            gestion=2026,
-            fecha_inicio="2026-01-01",
-            fecha_fin="2026-03-31",
-            activo=True,
+        
+        # Inscribir solo e1 en el curso
+        Inscripciones.objects.create(
+            estudiante_id=e1['id'], curso=curso, gestion=2026, estado='activo'
         )
-
-        assert self.service._period_label(None) == "Promedio calculado con los registros disponibles"
-        assert self.service._period_label(periodo) == "Primer Trimestre 2026"
-        formatted = self.service._format_period(periodo)
-        assert formatted["nombre"] == "Primer Trimestre"
-        assert formatted["activo"] is True
-
-    def test_average_and_attendance_helpers(self, monkeypatch):
-        estudiante_ids = ["student-1", "student-2"]
-
-        monkeypatch.setattr(self.service, "_build_attendance_map", lambda ids: {"student-1": 80, "student-2": 90})
-        assert self.service._calculate_attendance_average(estudiante_ids) == 85
-
-    def test_build_average_map_and_attendance_map(self, monkeypatch):
-        student_1 = uuid4()
-        student_2 = uuid4()
-
-        class FakeAvgQS:
-            def __init__(self):
-                self.calls = []
-
-            def filter(self, **kwargs):
-                return self
-
-            def values(self, *args, **kwargs):
-                return self
-
-            def annotate(self, **kwargs):
-                return [
-                    {"estudiante_id": student_1, "promedio": 91.5},
-                    {"estudiante_id": student_2, "promedio": 72.0},
-                ]
-
-        class FakeAttendanceQS:
-            def filter(self, **kwargs):
-                return self
-
-            def values(self, *args, **kwargs):
-                return self
-
-            def annotate(self, **kwargs):
-                return [
-                    {"estudiante_id": student_1, "total": 5, "presentes": 4},
-                    {"estudiante_id": student_2, "total": 4, "presentes": 2},
-                ]
-
-        monkeypatch.setattr("core.services.students_service.Notas.objects", FakeAvgQS())
-        monkeypatch.setattr("core.services.students_service.Asistencias.objects", FakeAttendanceQS())
-
-        averages = self.service._build_average_map([student_1, student_2], None)
-        attendance = self.service._build_attendance_map([student_1, student_2])
-
-        assert averages[str(student_1)] == 91.5
-        assert averages[str(student_2)] == 72.0
-        assert attendance[str(student_1)] == 80
-        assert attendance[str(student_2)] == 50
-
-    def test_assign_student_role_when_role_exists(self, monkeypatch):
-        usuario_creado = SimpleNamespace(id=uuid4())
-        assigned_by = SimpleNamespace(id=uuid4())
-        role = SimpleNamespace(nombre="Estudiante")
-
-        created = {}
-
-        class FakeRolesManager:
-            def filter(self, **kwargs):
-                return SimpleNamespace(first=lambda: role)
-
-        class FakeUsuarioRolesManager:
-            def filter(self, **kwargs):
-                return SimpleNamespace(first=lambda: role)
-
-            def get_or_create(self, **kwargs):
-                created["kwargs"] = kwargs
-                return (SimpleNamespace(), True)
-
-        monkeypatch.setattr("core.services.students_service.Roles.objects", FakeRolesManager())
-        monkeypatch.setattr("core.services.students_service.UsuarioRoles.objects", FakeUsuarioRolesManager())
-        self.service._assign_student_role(usuario_creado, assigned_by)
-
-        assert created["kwargs"]["usuario"] == usuario_creado
-        assert created["kwargs"]["defaults"]["asignado_por"] == assigned_by
-
-    def test_assign_student_role_no_role_returns(self, monkeypatch):
-        class FakeRolesManager:
-            def filter(self, **kwargs):
-                return SimpleNamespace(first=lambda: None)
-
-        class FakeUsuarioRolesManager:
-            def filter(self, **kwargs):
-                return SimpleNamespace(first=lambda: None)
-
-            def get_or_create(self, **kwargs):
-                raise AssertionError("should not be called")
-
-        monkeypatch.setattr("core.services.students_service.Roles.objects", FakeRolesManager())
-        monkeypatch.setattr("core.services.students_service.UsuarioRoles.objects", FakeUsuarioRolesManager())
-        self.service._assign_student_role(SimpleNamespace(id=uuid4()), SimpleNamespace(id=uuid4()))
-
-    @pytest.mark.django_db
-    def test_build_grade_filters_with_restricted_access(self, monkeypatch):
-        grado = Grados.objects.create(id=uuid4(), nivel="Primaria", numero=1, paralelo="A", gestion=2026)
-        monkeypatch.setattr(self.service.access_service, "can_view_all_academic_data", lambda u: False)
-        monkeypatch.setattr(self.service.access_service, "get_assigned_grade_ids", lambda u: [grado.id])
-
-        self.service.usuario = UsuarioFactory()
-        filters = self.service._build_grade_filters()
-
-        assert filters == [{"id": str(grado.id), "nombre": "Primaria 1A"}]
-
-
-# Agrega más tests específicos del servicio
-
-
-import pytest
-from uuid import uuid4
-from core.tests.factories.user_factory import UsuarioFactory
-from core.tests.factories.student_factory import EstudianteFactory
-from core.models import Grados, Usuarios, Estudiantes, Roles, UsuarioRoles
-
-
-@pytest.mark.django_db
-def test_create_student_permission_denied(monkeypatch):
-    service = StudentsService()
-    creator = UsuarioFactory()
-    service.usuario = creator
-    # force permission denied
-    monkeypatch.setattr(service.access_service, 'can_create_academic_data', lambda u: False)
-
-    with pytest.raises(PermissionError):
-        service.create_student(creator, {})
-
-
-@pytest.mark.django_db
-def test_create_student_creates_user_and_estudiante(monkeypatch):
-    # prepare grade and role
-    grado = Grados.objects.create(id=uuid4(), nivel="Primaria", numero=1, paralelo="A", gestion=2026)
-    Roles.objects.create(id=uuid4(), nombre="Estudiante")
-
-    creator = UsuarioFactory()
-    service = StudentsService()
-    service.usuario = creator
-    # allow creation
-    monkeypatch.setattr(service.access_service, 'can_create_academic_data', lambda u: True)
-
-    data = {
-        "nombres": "Laura",
-        "primer_apellido": "Gomez",
-        "email": "laura@example.com",
-        "ci": "CI9999",
-        "grado_id": grado.id,
-        "password": "secret",
-    }
-
-    # prevent role assignment side-effects which try to create UsuarioRoles without id
-    monkeypatch.setattr(service, '_assign_student_role', lambda usuario_creado, assigned_by: None)
-
-    result = service.create_student(creator, data)
-
-    # result should contain serialized student info; email may be under usuario
-    assert Usuarios.objects.filter(email__iexact="laura@example.com").exists()
-    # verify user exists
-    assert Usuarios.objects.filter(email__iexact="laura@example.com").exists()
-    usuario_creado = Usuarios.objects.get(email__iexact="laura@example.com")
-    assert Estudiantes.objects.filter(usuario=usuario_creado).exists()
-
+        
+        # El docente debe ver solo e1
+        result = svc.listar(users['docente'])
+        assert result['total'] == 1
+        assert result['estudiantes'][0]['id'] == e1['id']
+        
+        # El director ve ambos
+        result_dir = svc.listar(users['director'])
+        assert result_dir['total'] == 2
+        
+    def test_obtener_estudiante_docente_autorizado(self, users, roles):
+        """Test que un docente puede obtener un estudiante de su curso."""
+        svc = StudentsService()
+        
+        e = svc.crear(users['secretaria'], {
+            'rude': 'RUDOA1', 'ci': '88888881',
+            'nombres': 'Estudiante', 'primer_apellido': 'Autorizado',
+        })
+        
+        # Crear estructura y asignación
+        nivel = Niveles.objects.create(nombre='Primaria')
+        grado = Grados.objects.create(nivel=nivel, nombre='Primero', numero=1)
+        paralelo = Paralelos.objects.create(nombre='A')
+        curso = Cursos.objects.create(grado=grado, paralelo=paralelo, gestion=2026)
+        area = Areas.objects.create(nombre='Matemáticas')
+        docente_model = Docentes.objects.create(usuario=users['docente'])
+        da = DocenteAsignacion.objects.create(
+            docente=docente_model, curso=curso, area=area, gestion=2026
+        )
+        Inscripciones.objects.create(
+            estudiante_id=e['id'], curso=curso, gestion=2026, estado='activo'
+        )
+        
+        # Debe poder obtenerlo
+        result = svc.obtener(users['docente'], e['id'])
+        assert result['id'] == e['id']
+        
+    def test_obtener_estudiante_docente_no_autorizado(self, users, roles):
+        """Test que un docente NO puede obtener un estudiante que NO es suyo."""
+        svc = StudentsService()
+        
+        e = svc.crear(users['secretaria'], {
+            'rude': 'RUDNO1', 'ci': '99999991',
+            'nombres': 'Estudiante', 'primer_apellido': 'NoAutorizado',
+        })
+        
+        # Intentar obtenerlo sin estar autorizado
+        with pytest.raises(PermissionError):
+            svc.obtener(users['docente'], e['id'])
+            
+    def test_listar_tutor_ve_solo_sus_hijos(self, users, roles):
+        """Test que un tutor ve solo sus hijos."""
+        svc = StudentsService()
+        
+        # Crear estudiantes
+        e1 = svc.crear(users['secretaria'], {
+            'rude': 'RUDT1', 'ci': '10101010',
+            'nombres': 'Hijo', 'primer_apellido': 'Uno',
+        })
+        e2 = svc.crear(users['secretaria'], {
+            'rude': 'RUDT2', 'ci': '20202020',
+            'nombres': 'Hijo', 'primer_apellido': 'Dos',
+        })
+        e3 = svc.crear(users['secretaria'], {
+            'rude': 'RUDT3', 'ci': '30303030',
+            'nombres': 'NoHijo', 'primer_apellido': 'Tres',
+        })
+        
+        # Crear tutor
+        tutor_ci = '40404040'
+        tutor = Tutores.objects.create(
+            ci=tutor_ci, nombres='Tutor', primer_apellido='Test'
+        )
+        
+        # Asignar e1 y e2 al tutor
+        EstudianteTutor.objects.create(estudiante_id=e1['id'], tutor=tutor, activo=True)
+        EstudianteTutor.objects.create(estudiante_id=e2['id'], tutor=tutor, activo=True)
+        
+        # Crear usuario tutor con el mismo CI
+        tutor_user = Usuarios.objects.create(
+            ci=tutor_ci, nombre='Tutor', primer_apellido='User', email='tutor@test.com',
+            password_hash=make_password('123456'), rol=roles['tutor']
+        )
+        
+        # El tutor debe ver solo e1 y e2
+        result = svc.listar(tutor_user)
+        assert result['total'] == 2
+        ids_result = {e['id'] for e in result['estudiantes']}
+        assert e1['id'] in ids_result
+        assert e2['id'] in ids_result
+        assert e3['id'] not in ids_result

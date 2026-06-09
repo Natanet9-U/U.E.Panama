@@ -26,9 +26,29 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = 'django-insecure-(3zvwmq322-ptb(tzf$hd=w#0x=exhm3+1wvb!dzb(c5z7=il='
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# Use environment variable `DJANGO_DEBUG` to control debug mode. Defaults to True for development.
+DEBUG = os.environ.get('DJANGO_DEBUG', os.environ.get('DEBUG', 'True')).lower() in ('1', 'true', 'yes')
 
-ALLOWED_HOSTS = []
+# Configure allowed hosts via environment variable `ALLOWED_HOSTS`, comma-separated. Defaults to empty list.
+ALLOWED_HOSTS = [h for h in os.environ.get('ALLOWED_HOSTS', '').split(',') if h]
+
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+        },
+    },
+    'loggers': {
+        'core.tracing': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
+}
 
 
 # Application definition
@@ -41,9 +61,20 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
+    'drf_spectacular',
     'core',
     'corsheaders',
 ]
+
+REST_FRAMEWORK = {
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+}
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'U.E. Panama API',
+    'DESCRIPTION': 'Documentacion OpenAPI del backend de U.E. Panama',
+    'VERSION': '1.0.0',
+}
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -54,12 +85,24 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'core.middleware.TimezoneMiddleware',
     'core.middleware.LogMiddleware',
     'core.middleware.ErrorMiddleware',
     'core.middleware.AuthMiddleware',
 ]
 
-CORS_ALLOW_ALL_ORIGINS = True
+# CORS configuration: in production set CORS_ALLOW_ALL_ORIGINS=false and provide CORS_ALLOWED_ORIGINS
+CORS_ALLOW_ALL_ORIGINS = os.environ.get('CORS_ALLOW_ALL_ORIGINS', 'True').lower() in ('1', 'true', 'yes')
+CORS_ALLOWED_ORIGINS = [o for o in os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',') if o]
+
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'authorization',
+    'content-type',
+    'x-requested-with',
+    'x-timezone',
+]
+API_DOCS_PUBLIC = DEBUG or os.environ.get('API_DOCS_PUBLIC', '').lower() == 'true'
 AUTH_TOKEN_MAX_AGE = int(os.environ.get('AUTH_TOKEN_MAX_AGE', 60 * 60 * 24))
 AUTH_TOKEN_SALT = os.environ.get('AUTH_TOKEN_SALT', 'ue.panama.auth')
 ROOT_URLCONF = 'config.urls'
@@ -119,7 +162,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'America/La_Paz'
 
 USE_I18N = True
 

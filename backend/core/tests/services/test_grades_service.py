@@ -1,96 +1,122 @@
-"""Tests para GradesService"""
-from types import SimpleNamespace
-from uuid import uuid4
-
 import pytest
+from django.contrib.auth.hashers import make_password
+from unittest.mock import patch
 
-from core.models import Areas, DocenteAsignacion, Docentes, Estudiantes, Grados, Notas, Periodos
+from core.models import (
+    Areas, Cursos, DimensionConfigPeriodo, DimensionesEvaluacion, DocenteAsignacion, Docentes, Estudiantes, Grados,
+    Inscripciones, Niveles, Paralelos, Periodos, Roles, Usuarios,
+)
 from core.services.grades_service import GradesService
-from core.tests.factories.user_factory import UsuarioFactory
 
 
 @pytest.mark.django_db
 class TestGradesService:
-    """Tests para el servicio de calificaciones"""
 
-    def setup_method(self):
-        """Configuración antes de cada test"""
-        self.service = GradesService()
+    @pytest.fixture
+    def setup(self):
+        roles = {r.nombre: r for r in Roles.objects.bulk_create([
+            Roles(nombre='director'), Roles(nombre='secretaria'), Roles(nombre='docente'),
+        ])}
+        director = Usuarios.objects.create(
+            nombre='Director', email='dir@test.com',
+            password_hash=make_password('123456'), rol=roles['director'],
+        )
+        docente = Usuarios.objects.create(
+            nombre='Docente', email='doc@test.com',
+            password_hash=make_password('123456'), rol=roles['docente'],
+        )
+        nivel = Niveles.objects.create(nombre='Primaria')
+        grado = Grados.objects.create(nivel=nivel, nombre='Primero', numero=1)
+        paralelo = Paralelos.objects.create(nombre='A')
+        curso = Cursos.objects.create(grado=grado, paralelo=paralelo, gestion=2026)
+        area = Areas.objects.create(nombre='Matematica')
+        docente_model = Docentes.objects.create(usuario=docente)
+        da = DocenteAsignacion.objects.create(
+            docente=docente_model, curso=curso, area=area, gestion=2026,
+        )
+        periodo = Periodos.objects.create(
+            nombre='Trimestre 1', gestion=2026, numero=1,
+            fecha_inicio='2026-01-01', fecha_fin='2026-03-31', estado='activo',
+        )
+        dim_auto = DimensionesEvaluacion.objects.create(nombre='AUTOEVALUACION', orden=4, gestion=2026)
+        DimensionConfigPeriodo.objects.create(periodo=periodo, dimension=dim_auto, puntaje_maximo=5)
+        estudiante = Estudiantes.objects.create(
+            rude='RUD001', ci='12345678', nombres='Juan',
+            primer_apellido='Perez',
+        )
+        Inscripciones.objects.create(estudiante=estudiante, curso=curso, gestion=2026)
+        return {
+            'director': director, 'docente': docente, 'da': da, 'periodo': periodo,
+            'estudiante': estudiante, 'curso': curso, 'dim_auto': dim_auto,
+        }
 
-    def test_placeholder(self):
-        """Placeholder para tests de calificaciones"""
-        pass
+    def test_get_course_detail(self, setup):
+        with patch.object(GradesService, '_get_notas_dimension', return_value={}):
+            result = GradesService().get_course_detail(
+                setup['docente'], setup['da'].id,
+            )
+        assert result['curso']['area'] == 'Matematica'
+        assert len(result['estudiantes']) == 1
+        assert result['actividad_notas'] == {}
+        auto = next(d for d in result['dimensiones'] if d['nombre'] == 'AUTOEVALUACION')
+        assert auto['puntaje_maximo'] == 5.0
 
-    def test_build_grades_page_summary(self):
-        from django.utils import timezone
+    def test_get_course_detail_with_periodo(self, setup):
+        with patch.object(GradesService, '_get_notas_dimension', return_value={
+            str(setup['estudiante'].id): {'1': 88.5},
+        }):
+            result = GradesService().get_course_detail(
+                setup['docente'], setup['da'].id, periodo_id=setup['periodo'].id,
+            )
+        assert result['curso']['area'] == 'Matematica'
+        assert len(result['estudiantes']) == 1
+        assert result['notas_dimension'][str(setup['estudiante'].id)]['1'] == 88.5
 
-        usuario = UsuarioFactory()
-        periodo = Periodos.objects.create(id=uuid4(), nombre="P1", numero=1, gestion=2026, fecha_inicio="2026-01-01", fecha_fin="2026-03-31", activo=True)
-        grado = Grados.objects.create(id=uuid4(), nivel="Primaria", numero=1, paralelo="A", gestion=2026)
-        area = Areas.objects.create(id=uuid4(), nombre="Historia")
-        docente_user = UsuarioFactory()
-        docente = Docentes.objects.create(id=uuid4(), usuario=docente_user)
-        asign = DocenteAsignacion.objects.create(id=uuid4(), docente=docente, grado=grado, area=area)
+    def test_get_course_detail_permision(self, setup):
+        otro_rol = Roles.objects.get(nombre='docente')
+        otro = Usuarios.objects.create(
+            nombre='Otro', email='otro@test.com',
+            password_hash=make_password('123456'), rol=otro_rol,
+        )
+        with pytest.raises(PermissionError):
+            GradesService().get_course_detail(otro, setup['da'].id)
 
-        est_user = UsuarioFactory()
-        estudiante = Estudiantes.objects.create(id=uuid4(), usuario=est_user, grado=grado, primer_apellido="Z", nombres="Ana", ci="CI3")
-        Notas.objects.create(id=uuid4(), estudiante=estudiante, asignacion=asign, periodo=periodo, total=95, created_at=timezone.now())
+    def test_get_notas_totales(self, setup):
+        fake_cursor = type('Cursor', (), {
+            '__enter__': lambda self: self,
+            '__exit__': lambda self, exc_type, exc, tb: False,
+            'execute': lambda self, sql, params=None: None,
+            'fetchall': lambda self: [(setup['estudiante'].id, setup['periodo'].id, 92.0, 3)],
+        })()
+        with patch('core.services.grades_service.connection.cursor', return_value=fake_cursor), \
+             patch('core.services.grades_service.AccessControlService.puede_editar_notas', return_value=True):
+            result = GradesService().get_notas_totales(
+                setup['docente'], setup['da'].id, setup['periodo'].id,
+            )
+        assert result == [{
+            'estudiante_id': setup['estudiante'].id,
+            'periodo_id': setup['periodo'].id,
+            'nota_total': 92.0,
+            'dimensiones_evaluadas': 3,
+        }]
 
-        service = GradesService()
-        res = service.build_grades_page(usuario)
-        assert "resumen" in res
-        assert isinstance(res["resumen"], list)
-
-    def test_helper_methods(self):
-        assignment = SimpleNamespace(area=SimpleNamespace(nombre="Historia", id=uuid4()), grado=SimpleNamespace(nivel="Primaria", numero=1, paralelo="A"), docente=SimpleNamespace(usuario=SimpleNamespace(nombre="Ana", apellido="Perez")))
-        student = SimpleNamespace(nombres="Luis", primer_apellido="Gomez", ci="CI1", id=uuid4())
-        note = SimpleNamespace(total=92, asignacion=assignment, estudiante=student, estudiante_id=student.id)
-
-        assert self.service._percentage(2, 4) == 50
-        assert self.service._percentage(0, 0) == 0
-        assert self.service._trend_for_average(90) == "up"
-        assert self.service._trend_for_average(75) == "stable"
-        assert self.service._trend_for_average(60) == "down"
-        assert self.service._student_badge(95) == "Excelente"
-        assert self.service._student_badge(85) == "Bueno"
-        assert self.service._student_badge(72) == "En progreso"
-        assert self.service._student_badge(40) == "Requiere apoyo"
-
-        distribution = self.service._build_distribution([note, SimpleNamespace(total=68), SimpleNamespace(total=81), SimpleNamespace(total=95)])
-        assert distribution[0]["label"] == "Calificaciones 90+"
-        assert self.service._best_student_name([note]) == "Luis Gomez"
-
-        grouped = {student.id: {"nombre": "Luis Gomez", "documento": "CI1", "notes": [note]}}
-        rows = self.service._build_students_view(grouped, ["Historia"])
-        assert rows[0]["tendencia"] == "up"
-        assert rows[0]["materias"]["Historia"] == 92
-
-        courses = self.service._build_courses_view({assignment.area.id: {"nombre": "Historia", "notes": [note]}})
-        assert courses[0]["curso"] == "Historia"
-        assert courses[0]["mejor_estudiante"] == "Luis Gomez"
-
-        notes = [SimpleNamespace(asignacion=assignment, estudiante=student, estudiante_id=student.id, total=90)]
-        assert self.service._collect_subject_names(notes) == ["Historia"]
-        assert self.service._group_by_student(notes)[student.id]["nombre"] == "Luis Gomez"
-        assert self.service._group_by_course(notes)[assignment.area.id]["nombre"] == "Historia"
-
-    def test_serialize_grade_and_periods(self):
-        periodo = Periodos.objects.create(id=uuid4(), nombre="P1", numero=1, gestion=2026, fecha_inicio="2026-01-01", fecha_fin="2026-03-31", activo=True)
-        area = Areas.objects.create(id=uuid4(), nombre="Matematica")
-        grado = Grados.objects.create(id=uuid4(), nivel="Primaria", numero=1, paralelo="A", gestion=2026)
-        docente_user = UsuarioFactory()
-        docente = Docentes.objects.create(id=uuid4(), usuario=docente_user)
-        asign = DocenteAsignacion.objects.create(id=uuid4(), docente=docente, grado=grado, area=area)
-        estudiante = Estudiantes.objects.create(id=uuid4(), usuario=UsuarioFactory(), grado=grado, primer_apellido="Perez", nombres="Ana", ci="CI9")
-        nota = Notas.objects.create(id=uuid4(), estudiante=estudiante, asignacion=asign, periodo=periodo, total=88, indicador="OK", observaciones="Bien")
-
-        serialized = self.service._serialize_grade(nota)
-        assert serialized["curso"] == "Matematica"
-        assert serialized["docente"] == f"{docente_user.nombre} {docente_user.apellido}".strip()
-        assert serialized["periodo"] == "P1"
-
-        periods = self.service._build_periods()
-        assert any(period["nombre"].startswith("P1") for period in periods)
-
-
-# Agrega tests específicos para el servicio de calificaciones
+    def test_get_notas_por_dimension(self, setup):
+        fake_cursor = type('Cursor', (), {
+            '__enter__': lambda self: self,
+            '__exit__': lambda self, exc_type, exc, tb: False,
+            'execute': lambda self, sql, params=None: None,
+            'fetchall': lambda self: [(setup['estudiante'].id, 1, 88.5, 88.5, 100, 'SABER')],
+        })()
+        with patch('core.services.grades_service.connection.cursor', return_value=fake_cursor), \
+             patch('core.services.grades_service.AccessControlService.puede_editar_notas', return_value=True):
+            result = GradesService().get_notas_por_dimension(
+                setup['docente'], setup['da'].id, setup['periodo'].id,
+            )
+        assert result == [{
+            'estudiante_id': setup['estudiante'].id,
+            'dimension_id': 1,
+            'nota': 88.5,
+            'promedio': 88.5,
+            'puntaje_maximo': 100.0,
+            'dimension_nombre': 'SABER',
+        }]

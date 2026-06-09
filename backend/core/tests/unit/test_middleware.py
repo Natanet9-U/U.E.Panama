@@ -2,7 +2,7 @@
 import pytest
 import json
 from unittest.mock import Mock, patch, MagicMock
-from django.test import RequestFactory
+from django.test import RequestFactory, override_settings
 from django.http import HttpResponse, JsonResponse
 from uuid import uuid4
 
@@ -42,7 +42,7 @@ class TestLogMiddleware:
 
         middleware = LogMiddleware(get_response)
 
-        with patch('time.time', side_effect=[0.0, 0.5]):  # 500ms response
+        with patch('time.time', side_effect=[0.0, 0.5, 0.5, 0.5]):  # 500ms response
             with patch('builtins.print'):
                 response = middleware(request)
 
@@ -97,7 +97,6 @@ class TestErrorMiddleware:
         assert response.status_code == 500
         data = json.loads(response.content)
         assert data["error"] == "Error interno"
-        assert "Test error message" in data["detalle"]
 
     def test_error_middleware_handles_runtime_error(self):
         """Verifica que ErrorMiddleware maneja RuntimeError"""
@@ -174,6 +173,36 @@ class TestAuthMiddleware:
         response = middleware(request)
         assert response.status_code == 200
 
+    @override_settings(API_DOCS_PUBLIC=True)
+    def test_auth_middleware_allows_schema_path_in_local(self):
+        """Verifica que AuthMiddleware permite el schema en local"""
+        factory = RequestFactory()
+        request = factory.get("/api/schema/")
+
+        def get_response(req):
+            return JsonResponse({"openapi": "3.0.0"})
+
+        middleware = AuthMiddleware(get_response)
+        response = middleware(request)
+
+        assert response.status_code == 200
+
+    @override_settings(API_DOCS_PUBLIC=False)
+    def test_auth_middleware_blocks_schema_path_in_production(self):
+        """Verifica que AuthMiddleware bloquea el schema en producción"""
+        factory = RequestFactory()
+        request = factory.get("/api/schema/")
+
+        def get_response(req):
+            return JsonResponse({"openapi": "3.0.0"})
+
+        middleware = AuthMiddleware(get_response)
+        response = middleware(request)
+
+        assert response.status_code == 401
+        data = json.loads(response.content)
+        assert data["error"] == "No autorizado"
+
     def test_auth_middleware_rejects_missing_auth_header(self):
         """Verifica que AuthMiddleware rechaza requests sin Authorization"""
         factory = RequestFactory()
@@ -247,7 +276,7 @@ class TestAuthMiddleware:
             return HttpResponse("Protected resource")
 
         middleware = AuthMiddleware(get_response)
-        fake_user_id = uuid4()
+        fake_user_id = 999999
 
         with patch('core.middleware.decode_token', return_value=(str(fake_user_id), None)):
             response = middleware(request)

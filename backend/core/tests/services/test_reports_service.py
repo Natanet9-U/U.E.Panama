@@ -1,116 +1,81 @@
-"""Tests para ReportsService"""
-from types import SimpleNamespace
-from uuid import uuid4
-
 import pytest
+from django.contrib.auth.hashers import make_password
+from unittest.mock import patch, MagicMock
 
-from core.models import Areas, Asistencias, DocenteAsignacion, Docentes, Estudiantes, Grados, Notas, Periodos
+from core.models import (
+    Areas, Cursos, DocenteAsignacion, Docentes, Estudiantes, ExportEvent, Grados, Inscripciones,
+    Niveles, Paralelos, Periodos, Roles, Usuarios,
+)
 from core.services.reports_service import ReportsService
-from core.tests.factories.user_factory import UsuarioFactory
 
 
 @pytest.mark.django_db
 class TestReportsService:
-    """Tests para el servicio de reportes"""
 
-    def setup_method(self):
-        """Configuración antes de cada test"""
-        self.service = ReportsService()
-
-    def test_placeholder(self):
-        """Placeholder para tests de reportes"""
-        pass
-
-    def test_build_reports_page_alerts_and_top_students(self):
-        from django.utils import timezone
-
-        usuario = UsuarioFactory()
-        periodo = Periodos.objects.create(id=uuid4(), nombre="P1", numero=1, gestion=2026, fecha_inicio="2026-01-01", fecha_fin="2026-03-31", activo=True)
-        grado = Grados.objects.create(id=uuid4(), nivel="Primaria", numero=1, paralelo="A", gestion=2026)
-        area = Areas.objects.create(id=uuid4(), nombre="Biologia")
-        docente_user = UsuarioFactory()
-        docente = Docentes.objects.create(id=uuid4(), usuario=docente_user)
-        asign = DocenteAsignacion.objects.create(id=uuid4(), docente=docente, grado=grado, area=area)
-
-        est_user = UsuarioFactory()
-        estudiante = Estudiantes.objects.create(id=uuid4(), usuario=est_user, grado=grado, primer_apellido="M", nombres="Luis", ci="CI4")
-        # low note to trigger risk
-        Notas.objects.create(id=uuid4(), estudiante=estudiante, asignacion=asign, periodo=periodo, total=55)
-        # attendance
-        Asistencias.objects.create(id=uuid4(), estudiante=estudiante, registrado_por=usuario, fecha=timezone.localdate(), estado="Presente")
-
-        service = ReportsService()
-        res = service.build_reports_page(usuario)
-        assert "alertas" in res
-        assert isinstance(res["top_estudiantes"], list)
-
-    def test_helper_methods(self):
-        assignment = SimpleNamespace(area=SimpleNamespace(nombre="Biologia"), grado=SimpleNamespace(nivel="Primaria", numero=2, paralelo="B"), id="course-1")
-        period = SimpleNamespace(nombre="P1", gestion=2026)
-        student = SimpleNamespace(id=uuid4(), nombres="Ana", primer_apellido="Perez")
-        note = SimpleNamespace(estudiante_id=student.id, estudiante=student, total=95, asignacion=assignment, asignacion_id=assignment.id, periodo=period)
-        low_note = SimpleNamespace(total=60)
-
-        assert self.service._percentage(1, 2) == 50
-        assert self.service._percentage(0, 0) == 0
-        assert self.service._is_positive_state("Presente") is True
-        assert self.service._is_positive_state("Falta") is False
-        assert self.service._attendance_rate([SimpleNamespace(estado="Presente"), SimpleNamespace(estado="Falta")]) == 50
-        assert self.service._visible_courses_count([note, SimpleNamespace(asignacion_id="course-2")]) == 2
-        assert self.service._current_period_name([note]) == "P1 2026"
-        assert self.service._current_period_name([]) == "Sin periodo visible"
-        assert self.service._subject_averages([note]) == [("Biologia", 95.0)]
-
-        risk = self.service._build_risk_report([note, low_note])
-        assert risk["cantidad"] == 1
-        assert risk["porcentaje"] == 50
-
-        top = self.service._build_top_students([note])
-        assert top[0]["nombre"] == "Ana Perez"
-        assert self.service._build_alerts([low_note], UsuarioFactory())[0]["tipo"] == "warning"
-
-    @pytest.mark.django_db
-    def test_build_courses_helper_with_database_data(self):
-        usuario = UsuarioFactory()
-        periodo = Periodos.objects.create(id=uuid4(), nombre="P1", numero=1, gestion=2026, fecha_inicio="2026-01-01", fecha_fin="2026-03-31", activo=True)
-        grado = Grados.objects.create(id=uuid4(), nivel="Primaria", numero=2, paralelo="B", gestion=2026)
-        area = Areas.objects.create(id=uuid4(), nombre="Biologia")
-        docente_user = UsuarioFactory()
-        docente = Docentes.objects.create(id=uuid4(), usuario=docente_user)
-        asign = DocenteAsignacion.objects.create(id=uuid4(), docente=docente, grado=grado, area=area)
-        estudiante = Estudiantes.objects.create(id=uuid4(), usuario=UsuarioFactory(), grado=grado, primer_apellido="Perez", nombres="Ana", ci="CI44")
-        Notas.objects.create(id=uuid4(), estudiante=estudiante, asignacion=asign, periodo=periodo, total=95)
-
-        self.service.access_service.can_view_all_academic_data = lambda u: True
-        self.service.access_service.get_assigned_assignment_ids = lambda u: [asign.id]
-
-        courses = self.service._build_courses([SimpleNamespace(asignacion_id=asign.id, estudiante_id=estudiante.id, total=95)], usuario)
-        assert courses[0]["nombre"] == "Biologia"
-
-    @pytest.mark.django_db
-    def test_build_report_document_generates_docx(self):
-        usuario = UsuarioFactory()
-        periodo = Periodos.objects.create(id=uuid4(), nombre="3er Trimestre", numero=3, gestion=2026, fecha_inicio="2026-09-01", fecha_fin="2026-11-30", activo=True)
-        grado = Grados.objects.create(id=uuid4(), nivel="Primaria", numero=2, paralelo="A", gestion=2026)
-        area = Areas.objects.create(id=uuid4(), nombre="COMUNICACIÓN Y LENGUAJE")
-        docente_user = UsuarioFactory()
-        docente = Docentes.objects.create(id=uuid4(), usuario=docente_user)
-        asign = DocenteAsignacion.objects.create(id=uuid4(), docente=docente, grado=grado, area=area)
-        estudiante = Estudiantes.objects.create(
-            id=uuid4(),
-            usuario=UsuarioFactory(),
-            grado=grado,
-            primer_apellido="Perez",
-            nombres="Ana",
-            ci="CI100",
-            genero="F",
+    @pytest.fixture
+    def setup(self):
+        roles = {r.nombre: r for r in Roles.objects.bulk_create([
+            Roles(nombre='director'), Roles(nombre='secretaria'), Roles(nombre='docente'), Roles(nombre='tutor'),
+        ])}
+        director = Usuarios.objects.create(
+            nombre='Director', email='dir@test.com',
+            password_hash=make_password('123456'), rol=roles['director'],
         )
-        Notas.objects.create(id=uuid4(), estudiante=estudiante, asignacion=asign, periodo=periodo, total=65)
+        docente = Usuarios.objects.create(
+            nombre='Docente', email='doc@test.com',
+            password_hash=make_password('123456'), rol=roles['docente'],
+        )
+        nivel = Niveles.objects.create(nombre='Primaria')
+        grado = Grados.objects.create(nivel=nivel, nombre='Primero', numero=1)
+        paralelo = Paralelos.objects.create(nombre='A')
+        curso = Cursos.objects.create(grado=grado, paralelo=paralelo, gestion=2026)
+        area = Areas.objects.create(nombre='Matematica')
+        docente_model = Docentes.objects.create(usuario=docente)
+        da = DocenteAsignacion.objects.create(
+            docente=docente_model, curso=curso, area=area, gestion=2026,
+        )
+        periodo = Periodos.objects.create(
+            nombre='T1', gestion=2026, numero=1,
+            fecha_inicio='2026-01-01', fecha_fin='2026-03-31',
+        )
+        estudiante = Estudiantes.objects.create(
+            rude='RUD001', ci='12345678', nombres='Juan',
+            primer_apellido='Perez',
+        )
+        Inscripciones.objects.create(estudiante=estudiante, curso=curso, gestion=2026)
+        return {
+            'director': director, 'docente': docente, 'da': da,
+            'periodo': periodo, 'estudiante': estudiante,
+        }
 
-        document_bytes = self.service.build_report_document(usuario, periodo_id=periodo.id, trimestre=3)
+    def test_export_permision(self, setup):
+        # Use a user without export permissions (tutor) to assert PermissionError
+        tutor = Usuarios.objects.create(
+            nombre='Tutor', email='tutor@test.com',
+            password_hash=make_password('123456'), rol=Roles.objects.get(nombre='tutor'),
+        )
+        with pytest.raises(PermissionError):
+            ReportsService().export_notas_excel(
+                tutor, setup['da'].id, setup['periodo'].id,
+            )
 
-        assert isinstance(document_bytes, bytes)
-        assert document_bytes[:2] == b"PK"
+    @patch('core.services.reports_service.connection')
+    def test_export_excel(self, mock_conn, setup, dummy_cursor):
+        mock_conn.cursor.return_value.__enter__.return_value = dummy_cursor
+        buf = ReportsService().export_notas_excel(
+            setup['docente'], setup['da'].id, setup['periodo'].id,
+        )
+        assert buf.getvalue()[:2] == b'PK'
 
+    def test_export_history_lists_own_exports(self, setup):
+        ExportEvent.objects.create(
+            usuario=setup['docente'],
+            periodo=setup['periodo'],
+            docente_asignacion_id=setup['da'].id,
+            formato='xlsx',
+            filtros={'periodo_id': setup['periodo'].id},
+        )
 
-# Agrega tests específicos para el servicio de reportes
+        result = ReportsService().get_export_history(setup['docente'], periodo_id=setup['periodo'].id)
+        assert result['total'] == 1
+        assert result['exports'][0]['formato'] == 'xlsx'

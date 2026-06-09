@@ -1,10 +1,10 @@
-function PieChartMock({ segments = [], title = "Distribución" }) {
-  const total = segments.reduce((sum, segment) => sum + (segment.value || 0), 0) || 1;
+function PieChartMock({ segments = [], title = "Distribución", totalStudents = 0 }) {
+  const totalSum = segments.reduce((sum, segment) => sum + (segment.value || 0), 0) || 1;
 
   let accumulated = 0;
   const stops = segments.map((segment) => {
     const start = accumulated;
-    const end = accumulated + (segment.value / total) * 100;
+    const end = accumulated + (segment.value / totalSum) * 100;
     accumulated = end;
     return `${segment.color || "#6366f1"} ${start}% ${end}%`;
   });
@@ -19,8 +19,8 @@ function PieChartMock({ segments = [], title = "Distribución" }) {
         <div className="absolute inset-10 rounded-full border border-white bg-white shadow-sm" />
         <div className="relative z-10 text-center">
           <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">{title}</p>
-          <p className="mt-2 text-3xl font-black text-slate-900">{total}%</p>
-          <p className="mt-1 text-sm text-slate-500">Vista general</p>
+          <p className="mt-2 text-3xl font-black text-slate-900">{totalStudents || totalSum}</p>
+          <p className="mt-1 text-sm text-slate-500">{totalStudents ? "estudiantes" : "%"}</p>
         </div>
       </div>
 
@@ -34,7 +34,12 @@ function PieChartMock({ segments = [], title = "Distribución" }) {
                 <p className="text-xs text-slate-500">{segment.description || "Distribución académica"}</p>
               </div>
             </div>
-            <p className="text-sm font-bold text-slate-900">{segment.value}%</p>
+            <div className="text-right">
+              <p className="text-sm font-bold text-slate-900">{segment.value}%</p>
+              {totalStudents > 0 && (
+                <p className="text-xs text-slate-400">{Math.round(totalStudents * segment.value / 100)} estudiantes</p>
+              )}
+            </div>
           </div>
         ))}
       </div>

@@ -1,48 +1,62 @@
 import apiClient from "./apiClient";
+import { clearCourseDetailCache } from "./coursesService";
 
 const activitiesService = {
-  getActividades: async ({ asignacionId }) => {
+  getActividades: async ({ docenteAsignacionId }) => {
     const response = await apiClient.get("/actividades/", {
-      params: { asignacion_id: asignacionId },
+      params: { docente_asignacion_id: docenteAsignacionId },
     });
     return response.data;
   },
 
-  createActividad: async ({ asignacionId, nombre, puntaje_maximo, dimensionId, fecha }) => {
+  createActividad: async ({ docenteAsignacionId, nombre, puntaje_maximo, dimensionId, periodoId, fecha }) => {
     const response = await apiClient.post("/actividades/", {
-      asignacion_id: asignacionId,
+      docente_asignacion_id: docenteAsignacionId,
       nombre,
       puntaje_maximo,
       dimension_id: dimensionId,
-      fecha,
+      periodo_id: periodoId,
+      fecha_actividad: fecha,
     });
+    clearCourseDetailCache();
     return response.data;
   },
 
   deleteActividad: async ({ actividadId }) => {
     const response = await apiClient.delete(`/actividades/${actividadId}/`);
+    clearCourseDetailCache();
     return response.data;
   },
 
-  updateActividadesNotas: async ({ asignacionId, actividadId, notas }) => {
+  updateActividadesNotas: async ({ actividadId, notas, motivo }) => {
     const response = await apiClient.post("/actividades/notas/", {
-      asignacion_id: asignacionId,
       actividad_id: actividadId,
       notas,
+      motivo,
     });
+    clearCourseDetailCache();
     return response.data;
   },
 
-  getActividadesNotas: async ({ asignacionId }) => {
+  updateActividadesNotasBatch: async ({ actividades, motivo }) => {
+    const response = await apiClient.post("/actividades/notas/batch/", {
+      actividades,
+      motivo,
+    });
+    clearCourseDetailCache();
+    return response.data;
+  },
+
+  getActividadesNotas: async ({ docenteAsignacionId }) => {
     const response = await apiClient.get("/actividades/notas-estudiante/", {
-      params: { asignacion_id: asignacionId },
+      params: { docente_asignacion_id: docenteAsignacionId },
     });
     return response.data;
   },
 
-  recomputeTrimestre: async ({ asignacionId, periodoId }) => {
+  recomputeTrimestre: async ({ docenteAsignacionId, periodoId }) => {
     const response = await apiClient.post("/grades/recompute-actividades/", {
-      asignacion_id: asignacionId,
+      docente_asignacion_id: docenteAsignacionId,
       periodo_id: periodoId,
     });
     return response.data;

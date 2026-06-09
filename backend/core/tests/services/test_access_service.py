@@ -1,127 +1,162 @@
-"""Tests para AccessControlService"""
 import pytest
-from uuid import uuid4
-from types import SimpleNamespace
-from unittest.mock import patch
+from django.contrib.auth.hashers import make_password
 
+from core.models import Areas, Cursos, DocenteAsignacion, Docentes, Estudiantes, Grados, Inscripciones, Niveles, Paralelos, Roles, Usuarios, Tutores, EstudianteTutor
 from core.services.access_service import AccessControlService
-from core.tests.factories.user_factory import UsuarioFactory
-from core.models import Roles, UsuarioRoles, Docentes, DocenteAsignacion, Grados
 
 
 @pytest.mark.django_db
 class TestAccessControlService:
-    """Tests para el servicio de control de acceso"""
 
-    def setup_method(self):
-        """Configuración antes de cada test"""
-        self.service = AccessControlService()
+    @pytest.fixture
+    def roles(self):
+        return {r.nombre: r for r in Roles.objects.bulk_create([
+            Roles(nombre='director'), Roles(nombre='secretaria'), Roles(nombre='docente'),
+            Roles(nombre='regente'), Roles(nombre='tutor'),
+        ])}
 
-    def test_get_role_names_empty_for_none(self):
-        assert self.service.get_role_names(None) == set()
+    def _make_user(self, roles, rol_name, ci=None):
+        return Usuarios.objects.create(
+            ci=ci,
+            nombre='User',
+            email=f'{rol_name}@test.com',
+            password_hash=make_password('123456'),
+            rol=roles[rol_name],
+        )
 
-    def test_get_role_names_and_normalization(self):
-        user = UsuarioFactory()
-        Roles.objects.create(id=uuid4(), nombre="DirecTór")
-        role = Roles.objects.create(id=uuid4(), nombre="Profesor")
-        # assign both roles to user
-        UsuarioRoles.objects.create(id=uuid4(), usuario=user, rol=role, asignado_por=user, activo=True)
+    def test_director_permissions(self, roles):
+        u = self._make_user(roles, 'director')
+        ac = AccessControlService()
+        assert ac.es_director(u)
+        assert ac.puede_ver_todo(u)
+        assert ac.puede_habilitar_periodo(u)
+        assert ac.puede_ver_auditoria(u)
+        assert ac.puede_exportar(u)
+        assert ac.puede_cerrar_periodo(u)
 
-        # create direct role assignment with different case/accents on another user
-        other_user = UsuarioFactory()
-        direct_role = Roles.objects.create(id=uuid4(), nombre="Director")
-        UsuarioRoles.objects.create(id=uuid4(), usuario=other_user, rol=direct_role, asignado_por=other_user, activo=True)
+    def test_secretaria_permissions(self, roles):
+        u = self._make_user(roles, 'secretaria')
+        ac = AccessControlService()
+        assert ac.es_secretaria(u)
+        assert ac.puede_ver_todo(u)
+        assert ac.puede_cerrar_periodo(u)
+        assert ac.puede_gestionar_inscripciones(u)
+        assert ac.puede_gestionar_usuarios(u)
+        assert not ac.puede_habilitar_periodo(u)
 
-        # role names
-        names = self.service.get_role_names(user)
-        assert isinstance(names, set)
+    def test_docente_permissions(self, roles):
+        u = self._make_user(roles, 'docente')
+        ac = AccessControlService()
+        assert ac.es_docente(u)
+        assert not ac.puede_ver_todo(u)
+        assert not ac.puede_cerrar_periodo(u)
+        assert not ac.puede_gestionar_usuarios(u)
+        assert ac.puede_exportar(u)
 
-    def test_can_view_all_academic_data_true_for_director(self):
-        director = UsuarioFactory()
-        role = Roles.objects.create(id=uuid4(), nombre="Director")
-        UsuarioRoles.objects.create(id=uuid4(), usuario=director, rol=role, asignado_por=director, activo=True)
+    def test_regente_permissions(self, roles):
+        u = self._make_user(roles, 'regente')
+        ac = AccessControlService()
+        assert ac.es_regente(u)
+        assert ac.puede_ver_todo(u)
+        assert ac.puede_gestionar_licencias(u)
+        assert ac.puede_aprobar_licencia_directa(u, 3)
+        assert not ac.puede_aprobar_licencia_directa(u, 4)
 
-        assert self.service.can_view_all_academic_data(director) is True
+    def test_tutor_permissions(self, roles):
+        u = self._make_user(roles, 'tutor')
+        ac = AccessControlService()
+        assert ac.es_tutor(u)
+        assert not ac.puede_ver_todo(u)
+        assert not ac.puede_gestionar_licencias(u)
+        assert not ac.puede_exportar(u)
 
-    def test_can_view_all_academic_data_false_without_roles(self):
-        assert self.service.can_view_all_academic_data(None) is False
+    def test_is_admin(self, roles):
+        ac = AccessControlService()
+        assert ac.es_admin(self._make_user(roles, 'director'))
+        assert ac.es_admin(self._make_user(roles, 'secretaria'))
+        assert not ac.es_admin(self._make_user(roles, 'docente'))
 
-    def test_filter_students_queryset_scoped_by_grades(self):
-        queryset = SimpleNamespace()
+    def test_none_user(self):
+        ac = AccessControlService()
+        assert ac.get_role_name(None) is None
+        assert not ac.puede_ver_todo(None)
 
-        class FakeQueryset:
-            def none(self):
-                return "none"
+    def test_docente_asignado_and_relations(self, roles):
+        docente = self._make_user(roles, 'docente')
+        nivel = Niveles.objects.create(nombre='Primaria')
+        grado = Grados.objects.create(nivel=nivel, nombre='Primero', numero=1)
+        paralelo = Paralelos.objects.create(nombre='A')
+        curso = Cursos.objects.create(grado=grado, paralelo=paralelo, gestion=2026)
+        area = Areas.objects.create(nombre='Ciencias')
+        docente_model = Docentes.objects.create(usuario=docente)
+        da = DocenteAsignacion.objects.create(docente=docente_model, curso=curso, area=area, gestion=2026)
+        estudiante = Estudiantes.objects.create(rude='RUD002', ci='12345679', nombres='Ana', primer_apellido='Lopez')
+        Inscripciones.objects.create(estudiante=estudiante, curso=curso, gestion=2026)
 
-            def filter(self, **kwargs):
-                return kwargs
+        ac = AccessControlService()
+        assert ac.puede_editar_notas(docente, da.id)
+        assert ac.get_cursos_asignados(docente) == [curso.id]
+        assert list(ac.get_asignaciones_docente(docente)) == [da]
+        assert ac.get_estudiantes_ids_por_asignacion(da.id) == [estudiante.id]
 
-        fake_queryset = FakeQueryset()
-        with patch.object(self.service, "can_view_all_academic_data", return_value=False), \
-                patch.object(self.service, "get_assigned_grade_ids", return_value=["grade-1", "grade-2"]):
-            result = self.service.filter_students_queryset(fake_queryset, UsuarioFactory())
+    def test_docente_no_asignado_cannot_edit_specific_assignment(self, roles):
+        docente = self._make_user(roles, 'docente')
+        other = self._make_user(roles, 'secretaria')
+        nivel = Niveles.objects.create(nombre='Secundaria')
+        grado = Grados.objects.create(nivel=nivel, nombre='Segundo', numero=2)
+        paralelo = Paralelos.objects.create(nombre='B')
+        curso = Cursos.objects.create(grado=grado, paralelo=paralelo, gestion=2026)
+        area = Areas.objects.create(nombre='Historia')
+        docente_model2 = Docentes.objects.create(usuario=other)
+        DocenteAsignacion.objects.create(docente=docente_model2, curso=curso, area=area, gestion=2026)
 
-        assert result == {"grado_id__in": ["grade-1", "grade-2"]}
-
-    def test_filter_students_queryset_returns_none_when_no_grades(self):
-        class FakeQueryset:
-            def none(self):
-                return "none"
-
-            def filter(self, **kwargs):
-                return kwargs
-
-        fake_queryset = FakeQueryset()
-        with patch.object(self.service, "can_view_all_academic_data", return_value=False), \
-                patch.object(self.service, "get_assigned_grade_ids", return_value=[]):
-            result = self.service.filter_students_queryset(fake_queryset, UsuarioFactory())
-
-        assert result == "none"
-
-    def test_filter_courses_and_notes_for_admin(self):
-        marker = object()
-        with patch.object(self.service, "can_view_all_academic_data", return_value=True):
-            assert self.service.filter_courses_queryset(marker, None) is marker
-            assert self.service.filter_notes_queryset(marker, None) is marker
-
-    def test_filter_courses_and_notes_for_teacher(self):
-        class FakeQueryset:
-            def filter(self, **kwargs):
-                return kwargs
-
-        fake_queryset = FakeQueryset()
-        user = UsuarioFactory()
-        with patch.object(self.service, "can_view_all_academic_data", return_value=False):
-            courses = self.service.filter_courses_queryset(fake_queryset, user)
-            notes = self.service.filter_notes_queryset(fake_queryset, user)
-
-        assert courses == {"docente__usuario": user}
-        assert notes == {"asignacion__docente__usuario": user}
-
-    def test_build_permissions_payload(self):
-        user = UsuarioFactory()
-        with patch.object(self.service, "get_role_names", return_value={"secretaria", "director"}):
-            payload = self.service.build_permissions_payload(user)
-
-        assert payload == {
-            "roles": ["director", "secretaria"],
-            "puede_ver_todo": True,
-            "puede_crear": True,
-        }
-
-    def test_normalize_role_strips_accents(self):
-        assert self.service._normalize_role("Dirección") == "direccion"
-
-    def test_get_assigned_grade_ids(self):
-        usuario = UsuarioFactory()
-        docente = Docentes.objects.create(id=uuid4(), usuario=usuario)
-        grado = Grados.objects.create(id=uuid4(), nivel="Primaria", numero=1, paralelo="A", gestion=2026)
-        # create an area since area is NOT NULL
-        from core.models import Areas
-        area = Areas.objects.create(id=uuid4(), nombre="Matematica")
-        asign = DocenteAsignacion.objects.create(id=uuid4(), docente=docente, grado=grado, area=area)
-
-        ids = self.service.get_assigned_grade_ids(usuario)
-        assert isinstance(ids, list)
-        assert str(grado.id) in [str(x) for x in ids] or grado.id in ids
-
+        ac = AccessControlService()
+        assert ac.puede_editar_notas(docente, 99999) is False
+        assert ac.puede_editar_notas(docente) is True
+        
+    def test_get_estudiantes_ids_docente(self, roles):
+        """Test que obtiene los estudiantes de un docente."""
+        docente = self._make_user(roles, 'docente')
+        nivel = Niveles.objects.create(nombre='Primaria')
+        grado = Grados.objects.create(nivel=nivel, nombre='Primero', numero=1)
+        paralelo = Paralelos.objects.create(nombre='A')
+        curso = Cursos.objects.create(grado=grado, paralelo=paralelo, gestion=2026)
+        area = Areas.objects.create(nombre='Ciencias')
+        docente_model = Docentes.objects.create(usuario=docente)
+        da = DocenteAsignacion.objects.create(docente=docente_model, curso=curso, area=area, gestion=2026)
+        estudiante = Estudiantes.objects.create(rude='RUD003', ci='12345680', nombres='Luis', primer_apellido='Gomez')
+        Inscripciones.objects.create(estudiante=estudiante, curso=curso, gestion=2026)
+        
+        ac = AccessControlService()
+        ids = ac.get_estudiantes_ids_docente(docente)
+        assert ids == [estudiante.id]
+        
+    def test_get_estudiantes_ids_tutor(self, roles):
+        """Test que obtiene los estudiantes de un tutor."""
+        tutor_ci = '12345678'
+        tutor_user = self._make_user(roles, 'tutor', ci=tutor_ci)
+        tutor = Tutores.objects.create(ci=tutor_ci, nombres='Tutor', primer_apellido='Test')
+        estudiante = Estudiantes.objects.create(rude='RUD004', ci='87654321', nombres='Hijo', primer_apellido='Test')
+        EstudianteTutor.objects.create(estudiante=estudiante, tutor=tutor, activo=True)
+        
+        ac = AccessControlService()
+        ids = ac.get_estudiantes_ids_tutor(tutor_user)
+        assert ids == [estudiante.id]
+        
+    def test_get_estudiantes_autorizados(self, roles):
+        """Test que devuelve los estudiantes autorizados según el rol."""
+        director = self._make_user(roles, 'director')
+        docente = self._make_user(roles, 'docente')
+        tutor_ci = '11112222'
+        tutor = self._make_user(roles, 'tutor', ci=tutor_ci)
+        
+        ac = AccessControlService()
+        
+        # Director ve todos (None)
+        assert ac.get_estudiantes_autorizados(director) is None
+        
+        # Docente sin asignaciones ve []
+        assert ac.get_estudiantes_autorizados(docente) == []
+        
+        # Tutor sin relación ve []
+        assert ac.get_estudiantes_autorizados(tutor) == []

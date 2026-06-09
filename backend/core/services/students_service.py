@@ -1,318 +1,345 @@
-from uuid import uuid4
+from django.db import connection
+from django.db.models import Q
 
-from django.contrib.auth.hashers import make_password
-from django.db import IntegrityError, transaction
-from django.db.models import Avg, Count, Q
-from django.utils import timezone
-
-from ..models import Asistencias, Estudiantes, Grados, Notas, Periodos, Roles, UsuarioRoles, Usuarios
+from ..models import Estudiantes, Inscripciones, ActividadNotas, Actividades, Asistencias, NotaObservaciones, Periodos
+from ..tracing import trace_service_class
 from .access_service import AccessControlService
+from .audit_service import AuditService
+from .validation import validar_required, validar_ci, validar_fecha, validar_nombre, validar_rude, ValidationError
 
 
+@trace_service_class
 class StudentsService:
-    def __init__(self):
-        self.access_service = AccessControlService()
 
-    def build_students_page(self, *, query=None, grado_id=None, page=1, page_size=8):
-        queryset = Estudiantes.objects.select_related("grado", "usuario").order_by("nombres", "primer_apellido")
-        queryset = self.access_service.filter_students_queryset(queryset, self._current_user)
+    def __init__(self):
+        self.ac = AccessControlService()
+        self.audit = AuditService()
+
+    def listar(self, usuario, query=None, grado_id=None, page=1, page_size=8, incluir_inactivos=False):
+        if incluir_inactivos:
+            qs = Estudiantes.objects.all().order_by('primer_apellido', 'nombres')
+        else:
+            qs = Estudiantes.objects.filter(estado='activo').order_by('primer_apellido', 'nombres')
+        
+        # Aplicar filtro por scope
+        estudiantes_ids = self.ac.get_estudiantes_autorizados(usuario)
+        if estudiantes_ids is not None:
+            if not estudiantes_ids:
+                return {
+                    'estudiantes': [],
+                    'total': 0,
+                    'page': page,
+                    'page_size': page_size,
+                    'total_pages': 0,
+                }
+            qs = qs.filter(id__in=estudiantes_ids)
 
         if query:
-            queryset = queryset.filter(
+            qs = qs.filter(
                 Q(nombres__icontains=query)
                 | Q(primer_apellido__icontains=query)
-                | Q(segundo_apellido__icontains=query)
                 | Q(ci__icontains=query)
-                | Q(usuario__email__icontains=query)
+                | Q(rude__icontains=query)
             )
 
         if grado_id:
-            queryset = queryset.filter(grado_id=grado_id)
+            qs = qs.filter(
+                inscripciones__curso__grado_id=grado_id,
+                inscripciones__estado='activo',
+            )
 
-        total_estudiantes = queryset.count()
-        page = max(int(page or 1), 1)
-        page_size = max(min(int(page_size or 8), 50), 1)
+        # If page is None, return full list
+        if page is None:
+            estudiantes = qs
+            result = [self._to_dict(e) for e in estudiantes]
+            self._enrich_from_db(result)
+            return result
+
+        total = qs.count()
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        page = min(page, total_pages) if total > 0 else 1
         offset = (page - 1) * page_size
+        estudiantes = qs[offset:offset + page_size]
 
-        periodo_activo = self._get_periodo_activo()
-        estudiante_ids = list(queryset.values_list("id", flat=True))
-
-        promedio_map = self._build_average_map(estudiante_ids, periodo_activo)
-        asistencia_map = self._build_attendance_map(estudiante_ids)
-
-        estudiantes = []
-        for estudiante in queryset[offset : offset + page_size]:
-            promedio = promedio_map.get(str(estudiante.id), 0)
-            asistencia = asistencia_map.get(str(estudiante.id), 0)
-            estudiantes.append(self._serialize_student(estudiante, promedio, asistencia))
+        result = [self._to_dict(e) for e in estudiantes]
+        self._enrich_from_db(result)
 
         return {
-            "resumen": self._build_summary(queryset, periodo_activo),
-            "estudiantes": estudiantes,
-            "paginacion": {
-                "pagina": page,
-                "tamano": page_size,
-                "total": total_estudiantes,
-                "paginas": max((total_estudiantes + page_size - 1) // page_size, 1),
-                "siguiente": page * page_size < total_estudiantes,
-                "anterior": page > 1,
-            },
-            "filtros": {
-                "grados": self._build_grade_filters(),
-                "periodo_activo": self._format_period(periodo_activo),
-            },
-            "permisos": self.access_service.build_permissions_payload(self._current_user),
+            'estudiantes': result,
+            'total': total,
+            'page': page,
+            'page_size': page_size,
+            'total_pages': total_pages,
         }
 
-    def create_student(self, usuario, data):
-        if not self.access_service.can_create_academic_data(usuario):
-            raise PermissionError("No tienes permisos para crear estudiantes")
+    def obtener(self, usuario, estudiante_id):
+        # Verificar si el usuario está autorizado a ver este estudiante
+        estudiantes_ids = self.ac.get_estudiantes_autorizados(usuario)
+        if estudiantes_ids is not None and estudiante_id not in estudiantes_ids:
+            raise PermissionError('No tienes permisos para ver este estudiante')
 
-        nombres = (data.get("nombres") or "").strip()
-        primer_apellido = (data.get("primer_apellido") or "").strip()
-        segundo_apellido = (data.get("segundo_apellido") or "").strip() or None
-        email = (data.get("email") or "").strip().lower()
-        ci = (data.get("ci") or "").strip()
-        telefono = (data.get("telefono") or "").strip() or None
-        grado_id = data.get("grado_id")
-        genero = (data.get("genero") or "").strip() or None
-        estado = (data.get("estado") or "Activo").strip()
-        password = (data.get("password") or ci or email).strip()
+        e = Estudiantes.objects.get(id=estudiante_id)
+        return self._to_dict(e)
 
-        if not nombres or not primer_apellido or not email or not ci or not grado_id:
-            raise ValueError("Debes enviar nombres, primer apellido, email, ci y grado")
+    def crear(self, usuario, data):
+        if not self.ac.puede_gestionar_inscripciones(usuario):
+            raise PermissionError('Solo la secretaria puede crear estudiantes')
 
-        try:
-            grado = Grados.objects.get(id=grado_id)
-        except Grados.DoesNotExist as exc:
-            raise ValueError("El grado seleccionado no existe") from exc
+        validar_required(data, ['rude', 'ci', 'nombres', 'primer_apellido'])
+        validar_rude(data.get('rude'))
+        validar_ci(data.get('ci'))
+        validar_fecha(data.get('fecha_nacimiento'), 'fecha_nacimiento')
+        validar_nombre(data.get('nombres'), 'Nombres')
+        validar_nombre(data.get('primer_apellido'), 'Primer apellido')
 
-        with transaction.atomic():
-            if Usuarios.objects.filter(email__iexact=email).exists():
-                raise ValueError("Ya existe un usuario con ese email")
-            if Usuarios.objects.filter(ci__iexact=ci).exists():
-                raise ValueError("Ya existe un usuario con ese CI")
-
-            usuario_creado = Usuarios.objects.create(
-                id=uuid4(),
-                nombre=nombres,
-                apellido=primer_apellido,
-                email=email,
-                password_hash=make_password(password),
-                ci=ci,
-                telefono=telefono,
-                activo=True,
-            )
-
-            estudiante = Estudiantes.objects.create(
-                id=uuid4(),
-                usuario=usuario_creado,
-                grado=grado,
-                primer_apellido=primer_apellido,
-                segundo_apellido=segundo_apellido,
-                nombres=nombres,
-                ci=ci,
-                genero=genero,
-                estado=estado,
-                created_at=timezone.now(),
-            )
-
-            self._assign_student_role(usuario_creado, usuario)
-
-        promedio = self._calculate_average_for_student(estudiante.id)
-        asistencia = self._calculate_attendance_for_student(estudiante.id)
-        return self._serialize_student(estudiante, promedio, asistencia)
-
-    def _build_summary(self, queryset, periodo_activo):
-        total_estudiantes = queryset.count()
-        activos = queryset.filter(Q(estado__iexact="Activo") | Q(estado__isnull=True) | Q(estado="")).count()
-        inactivos = total_estudiantes - activos
-
-        estudiante_ids = list(queryset.values_list("id", flat=True))
-        promedio_qs = Notas.objects.filter(estudiante_id__in=estudiante_ids, total__isnull=False)
-        if periodo_activo is not None:
-            promedio_qs = promedio_qs.filter(periodo=periodo_activo)
-        promedio_general = promedio_qs.aggregate(promedio=Avg("total"))["promedio"] or 0
-
-        asistencia_promedio = self._calculate_attendance_average(estudiante_ids)
-
-        return [
-            {
-                "titulo": "Total Estudiantes",
-                "valor": str(total_estudiantes),
-                "detalle": "Listado general del sistema",
-                "acento": "blue",
-            },
-            {
-                "titulo": "Estudiantes Activos",
-                "valor": str(activos),
-                "detalle": f"{inactivos} inactivos o retirados",
-                "acento": "green",
-            },
-            {
-                "titulo": "Promedio General",
-                "valor": f"{promedio_general:.1f}",
-                "detalle": self._period_label(periodo_activo),
-                "acento": "violet",
-            },
-            {
-                "titulo": "Asistencia Promedio",
-                "valor": f"{asistencia_promedio}%",
-                "detalle": "Promedio de asistencia acumulada",
-                "acento": "orange",
-            },
-        ]
-
-    def _serialize_student(self, estudiante, promedio, asistencia):
-        grado = estudiante.grado
-        nombre = f"{estudiante.nombres} {estudiante.primer_apellido}".strip()
-        if estudiante.segundo_apellido:
-            nombre = f"{nombre} {estudiante.segundo_apellido}".strip()
-
-        return {
-            "id": str(estudiante.id),
-            "nombre": nombre,
-            "codigo": self._build_student_code(estudiante),
-            "email": getattr(estudiante.usuario, "email", "") or "",
-            "telefono": getattr(estudiante.usuario, "telefono", "") or "-",
-            "grado": {
-                "id": str(grado.id),
-                "nombre": f"{grado.nivel} {grado.numero}{grado.paralelo}",
-            },
-            "promedio": round(float(promedio or 0), 1),
-            "asistencia": asistencia,
-            "estado": self._normalize_state(estudiante.estado),
-            "estado_clase": "Activo" if self._is_active(estudiante.estado) else "Inactivo",
-            "avatar": self._avatar_label(estudiante),
-        }
-
-    def _build_average_map(self, estudiante_ids, periodo_activo):
-        if not estudiante_ids:
-            return {}
-
-        queryset = Notas.objects.filter(estudiante_id__in=estudiante_ids, total__isnull=False)
-        if periodo_activo is not None:
-            queryset = queryset.filter(periodo=periodo_activo)
-
-        aggregation = queryset.values("estudiante_id").annotate(promedio=Avg("total"))
-        return {str(item["estudiante_id"]): round(float(item["promedio"] or 0), 1) for item in aggregation}
-
-    def _build_attendance_map(self, estudiante_ids):
-        if not estudiante_ids:
-            return {}
-
-        queryset = Asistencias.objects.filter(estudiante_id__in=estudiante_ids)
-        aggregation = queryset.values("estudiante_id").annotate(
-            total=Count("id"),
-            presentes=Count(
-                "id",
-                filter=~Q(estado__iexact="Falta") & ~Q(estado__iexact="Ausente") & ~Q(estado__iexact="Inasistencia"),
-            ),
+        estudiante = Estudiantes.objects.create(
+            rude=data['rude'],
+            ci=data['ci'],
+            nombres=data['nombres'],
+            primer_apellido=data['primer_apellido'],
+            segundo_apellido=data.get('segundo_apellido', ''),
+            fecha_nacimiento=data.get('fecha_nacimiento'),
+            genero=data.get('genero'),
+            pais_nacimiento=data.get('pais_nacimiento', 'Bolivia'),
+            tiene_discapacidad=data.get('tiene_discapacidad', False),
+            tipo_discapacidad=data.get('tipo_discapacidad', ''),
+            tiene_tea=data.get('tiene_tea', False),
+            dificultad_aprendizaje=data.get('dificultad_aprendizaje', ''),
         )
+        self.audit.record_estudiante_change(usuario, 'CREATE', estudiante.id, {'rude': data['rude'], 'nombres': data['nombres']})
+        return self._to_dict(estudiante)
 
-        attendance_map = {}
-        for item in aggregation:
-            total = item["total"] or 0
-            presentes = item["presentes"] or 0
-            attendance_map[str(item["estudiante_id"])] = round((presentes / total) * 100) if total else 0
-        return attendance_map
+    def actualizar(self, usuario, estudiante_id, data):
+        if not self.ac.puede_gestionar_inscripciones(usuario):
+            raise PermissionError('Solo la secretaria puede modificar estudiantes')
 
-    def _calculate_attendance_average(self, estudiante_ids):
-        attendance_map = self._build_attendance_map(estudiante_ids)
-        if not attendance_map:
-            return 0
-        return round(sum(attendance_map.values()) / len(attendance_map))
+        estudiante = Estudiantes.objects.get(id=estudiante_id)
 
-    def _build_grade_filters(self):
-        grades = Grados.objects.order_by("gestion", "nivel", "numero", "paralelo")
-        if not self.access_service.can_view_all_academic_data(self._current_user):
-            grade_ids = self.access_service.get_assigned_grade_ids(self._current_user)
-            if grade_ids:
-                grades = grades.filter(id__in=grade_ids)
-            else:
-                grades = grades.none()
-        return [
+        if data.get('ci'):
+            validar_ci(data.get('ci'))
+        if data.get('rude'):
+            validar_rude(data.get('rude'))
+
+        for campo in ('rude', 'ci', 'nombres', 'primer_apellido', 'segundo_apellido',
+                       'fecha_nacimiento', 'genero', 'pais_nacimiento',
+                       'tiene_discapacidad', 'tipo_discapacidad',
+                       'tiene_tea', 'dificultad_aprendizaje'):
+            if campo in data:
+                setattr(estudiante, campo, data[campo])
+        estudiante.save()
+        self.audit.record_estudiante_change(usuario, 'UPDATE', estudiante_id, {k: data[k] for k in data if k in data})
+        return self._to_dict(estudiante)
+
+    def eliminar(self, usuario, estudiante_id):
+        if not self.ac.puede_gestionar_inscripciones(usuario):
+            raise PermissionError('Solo la secretaria puede eliminar estudiantes')
+
+        estudiante = Estudiantes.objects.get(id=estudiante_id)
+        estudiante.estado = 'inactivo'
+        estudiante.save(update_fields=['estado'])
+        self.audit.record_estudiante_change(usuario, 'DELETE', estudiante_id, {'estado': 'inactivo'})
+
+    def restaurar(self, usuario, estudiante_id):
+        if not self.ac.puede_gestionar_inscripciones(usuario):
+            raise PermissionError('Solo la secretaria puede restaurar estudiantes')
+
+        estudiante = Estudiantes.objects.get(id=estudiante_id)
+        estudiante.estado = 'activo'
+        estudiante.save(update_fields=['estado'])
+        self.audit.record_estudiante_change(usuario, 'RESTORE', estudiante_id, {'estado': 'activo'})
+        return self._to_dict(estudiante)
+
+    def historial_academico(self, usuario, estudiante_id):
+        # Verificar si el usuario está autorizado a ver este estudiante
+        estudiantes_ids = self.ac.get_estudiantes_autorizados(usuario)
+        if estudiantes_ids is not None and estudiante_id not in estudiantes_ids:
+            raise PermissionError('No autorizado para ver el historial de este estudiante')
+
+        estudiante = Estudiantes.objects.get(id=estudiante_id)
+        resultado = self._to_dict(estudiante)
+
+        inscripciones_qs = Inscripciones.objects.filter(
+            estudiante_id=estudiante_id
+        ).select_related('curso__grado', 'curso__paralelo').order_by('-gestion')
+
+        resultado['inscripciones'] = [
             {
-                "id": str(grado.id),
-                "nombre": f"{grado.nivel} {grado.numero}{grado.paralelo}",
+                'id': i.id,
+                'curso': str(i.curso),
+                'grado': i.curso.grado.nombre,
+                'paralelo': i.curso.paralelo.nombre,
+                'gestion': i.gestion,
+                'estado': i.estado,
+                'fecha_inscripcion': str(i.fecha_inscripcion),
             }
-            for grado in grades
+            for i in inscripciones_qs
         ]
 
-    def _build_student_code(self, estudiante):
-        if estudiante.ci:
-            return estudiante.ci
-        return str(estudiante.id).split("-")[0].upper()
+        notas_qs = ActividadNotas.objects.filter(
+            estudiante_id=estudiante_id
+        ).select_related(
+            'actividad__periodo', 'actividad__dimension',
+            'actividad__docente_asignacion__curso__grado',
+            'actividad__docente_asignacion__area',
+        ).order_by('-actividad__periodo__gestion', 'actividad__periodo__nombre', 'actividad__fecha_actividad')
 
-    def _avatar_label(self, estudiante):
-        initials = "".join(part[0] for part in [estudiante.nombres, estudiante.primer_apellido] if part).upper()
-        return initials[:2] or "ES"
+        actividades = []
+        for an in notas_qs:
+            actividades.append({
+                'actividad_id': an.actividad_id,
+                'actividad_nombre': an.actividad.nombre,
+                'dimension': an.actividad.dimension.nombre,
+                'puntaje_maximo': float(an.actividad.puntaje_maximo),
+                'valor': float(an.valor) if an.valor is not None else None,
+                'fecha': str(an.actividad.fecha_actividad),
+                'periodo': an.actividad.periodo.nombre,
+                'gestion': an.actividad.periodo.gestion,
+                'docente_asignacion_id': an.actividad.docente_asignacion_id,
+                'curso': str(an.actividad.docente_asignacion.curso),
+                'area': an.actividad.docente_asignacion.area.nombre,
+            })
+        resultado['actividades'] = actividades
 
-    def _normalize_state(self, estado):
-        if not estado:
-            return "Activo"
-        return estado.strip().title()
+        obs_qs = NotaObservaciones.objects.filter(
+            estudiante_id=estudiante_id
+        ).select_related('periodo', 'docente_asignacion__curso', 'docente_asignacion__area')
+        resultado['observaciones'] = [
+            {
+                'id': o.id,
+                'periodo': o.periodo.nombre,
+                'gestion': o.periodo.gestion,
+                'curso': str(o.docente_asignacion.curso),
+                'area': o.docente_asignacion.area.nombre,
+                'indicador': o.indicador,
+                'observacion': o.observacion,
+            }
+            for o in obs_qs.order_by('-periodo__gestion', 'periodo__nombre')
+        ]
 
-    def _is_active(self, estado):
-        if not estado:
-            return True
-        return estado.strip().lower() == "activo"
+        asistencias_qs = Asistencias.objects.filter(
+            estudiante_id=estudiante_id
+        ).select_related('docente_asignacion__curso').order_by('-fecha')
 
-    def _get_periodo_activo(self):
-        periodo = Periodos.objects.filter(activo=True).order_by("-gestion", "-numero").first()
-        if periodo is not None:
-            return periodo
-        return Periodos.objects.order_by("-gestion", "-numero").first()
+        resultado['asistencias'] = [
+            {
+                'id': a.id,
+                'fecha': str(a.fecha),
+                'estado': a.estado,
+                'tipo': a.tipo,
+                'curso': str(a.docente_asignacion.curso) if a.docente_asignacion else None,
+            }
+            for a in asistencias_qs
+        ]
 
-    def _period_label(self, periodo_activo):
-        if periodo_activo is None:
-            return "Promedio calculado con los registros disponibles"
-        return f"{periodo_activo.nombre} {periodo_activo.gestion}"
+        from collections import Counter
+        resumen_gestion = {}
+        for a in asistencias_qs:
+            gestion = a.fecha.year
+            if gestion not in resumen_gestion:
+                resumen_gestion[gestion] = Counter()
+            resumen_gestion[gestion][a.estado] += 1
 
-    def _format_period(self, periodo_activo):
-        if periodo_activo is None:
-            return None
-        return {
-            "nombre": periodo_activo.nombre,
-            "numero": periodo_activo.numero,
-            "gestion": periodo_activo.gestion,
-            "fecha_inicio": periodo_activo.fecha_inicio,
-            "fecha_fin": periodo_activo.fecha_fin,
-            "activo": bool(periodo_activo.activo),
+        resultado['resumen_asistencias'] = {
+            str(g): dict(counts) for g, counts in resumen_gestion.items()
         }
 
-    def _calculate_average_for_student(self, estudiante_id):
-        queryset = Notas.objects.filter(estudiante_id=estudiante_id, total__isnull=False)
-        periodo_activo = self._get_periodo_activo()
-        if periodo_activo is not None:
-            queryset = queryset.filter(periodo=periodo_activo)
-        return queryset.aggregate(promedio=Avg("total"))["promedio"] or 0
+        return resultado
 
-    def _calculate_attendance_for_student(self, estudiante_id):
-        queryset = Asistencias.objects.filter(estudiante_id=estudiante_id)
-        total = queryset.count()
-        if not total:
-            return 0
+    def _validar_data(self, data):
+        required = ('rude', 'ci', 'nombres', 'primer_apellido')
+        missing = [f for f in required if not data.get(f)]
+        if missing:
+            raise ValueError(f'Campos requeridos faltantes: {", ".join(missing)}')
 
-        presentes = queryset.exclude(estado__iexact="Falta").exclude(estado__iexact="Ausente").exclude(estado__iexact="Inasistencia").count()
-        return round((presentes / total) * 100)
-
-    def _assign_student_role(self, usuario_creado, assigned_by):
-        role = Roles.objects.filter(nombre__iexact="estudiante").first()
-        if role is None:
+    def _enrich_from_db(self, estudiantes):
+        """Batch-enrich student dicts with grado, promedio, asistencia."""
+        ids = [e['id'] for e in estudiantes]
+        if not ids:
             return
 
-        UsuarioRoles.objects.get_or_create(
-            usuario=usuario_creado,
-            rol=role,
-            defaults={
-                "asignado_por": assigned_by,
-                "fecha_asignacion": timezone.now(),
-                "activo": True,
-            },
-        )
+        id_list = ','.join(['%s'] * len(ids))
 
-    @property
-    def _current_user(self):
-        return getattr(self, "usuario", None)
+        # current active period
+        periodo = Periodos.objects.filter(estado='activo').order_by('-gestion', 'fecha_inicio').first()
+        periodo_id = periodo.id if periodo else None
 
+        # grado: latest inscripcion
+        try:
+            cursor = connection.cursor()
+            cursor.execute(
+                f"""SELECT DISTINCT ON (i.estudiante_id) i.estudiante_id,
+                           g.nombre AS grado_nombre
+                    FROM inscripciones i
+                    JOIN cursos c ON c.id = i.curso_id
+                    JOIN grados g ON g.id = c.grado_id
+                    WHERE i.estudiante_id IN ({id_list}) AND i.estado = 'activo'
+                    ORDER BY i.estudiante_id, i.gestion DESC""",
+                ids,
+            )
+            grado_map = {row[0]: row[1] for row in cursor.fetchall()}
+            cursor.close()
+        except Exception:
+            grado_map = {}
+
+        # promedio from v_notas_totales
+        if periodo_id:
+            try:
+                cursor = connection.cursor()
+                cursor.execute(
+                    f"""SELECT estudiante_id, ROUND(AVG(nota_total), 2)
+                        FROM v_notas_totales
+                        WHERE estudiante_id IN ({id_list})
+                          AND periodo_id = %s
+                          AND nota_total IS NOT NULL
+                        GROUP BY estudiante_id""",
+                    ids + [periodo_id],
+                )
+                promedio_map = {row[0]: float(row[1]) for row in cursor.fetchall()}
+                cursor.close()
+            except Exception:
+                promedio_map = {}
+        else:
+            promedio_map = {}
+
+        # asistencia from asistencias
+        try:
+            cursor = connection.cursor()
+            cursor.execute(
+                f"""SELECT estudiante_id,
+                           COUNT(*) FILTER (WHERE estado = 'presente') * 100.0 / NULLIF(COUNT(*), 0)
+                    FROM asistencias
+                    WHERE estudiante_id IN ({id_list})
+                    GROUP BY estudiante_id""",
+                ids,
+            )
+            asistencia_map = {row[0]: round(float(row[1]), 1) for row in cursor.fetchall()}
+            cursor.close()
+        except Exception:
+            asistencia_map = {}
+
+        for e in estudiantes:
+            eid = e['id']
+            if eid in grado_map:
+                e['grado'] = grado_map[eid]
+            if eid in promedio_map:
+                e['promedio'] = promedio_map[eid]
+            if eid in asistencia_map:
+                e['asistencia'] = asistencia_map[eid]
+
+    def _to_dict(self, e):
+        return {
+            'id': e.id,
+            'rude': e.rude,
+            'ci': e.ci,
+            'nombres': e.nombres,
+            'primer_apellido': e.primer_apellido,
+            'segundo_apellido': e.segundo_apellido or '',
+            'fecha_nacimiento': str(e.fecha_nacimiento) if e.fecha_nacimiento else None,
+            'genero': e.genero,
+            'pais_nacimiento': e.pais_nacimiento,
+            'tiene_discapacidad': e.tiene_discapacidad,
+            'tipo_discapacidad': e.tipo_discapacidad or '',
+            'tiene_tea': e.tiene_tea,
+            'dificultad_aprendizaje': e.dificultad_aprendizaje or '',
+            'estado': e.estado,
+        }

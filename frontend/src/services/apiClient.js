@@ -12,6 +12,11 @@ apiClient.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+  try {
+    config.headers["X-Timezone"] = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  } catch (e) {
+    config.headers["X-Timezone"] = "America/La_Paz";
+  }
   return config;
 });
 

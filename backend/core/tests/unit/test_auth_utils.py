@@ -1,10 +1,10 @@
 """Tests unitarios de utilidades de autenticación"""
 import pytest
 import time
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 from uuid import uuid4
 
-from core.auth_utils import build_token, decode_token, get_signer
+from core.auth_utils import build_token, decode_token, get_signer, get_user_from_token, refresh_token, get_user_from_reset_token
 from django.core.signing import BadSignature, SignatureExpired
 
 
@@ -163,7 +163,6 @@ class TestAuthUtils:
         assert decoded_id == original_id
         assert type(decoded_id) == type(original_id)
 
-
     def test_token_invalid_with_different_salt(self):
         """Si el salt cambia, tokens previos no deben decodificarse"""
         token = build_token("user-salt-test")
@@ -203,5 +202,92 @@ class TestAuthUtils:
 
         assert error is None
         assert user_id == user_id_original
+
+    def test_refresh_token(self):
+        """Verifica que refresh_token genera un nuevo token válido"""
+        usuario_mock = MagicMock(id="123")
+        token = refresh_token(usuario_mock)
+        assert token is not None
+        assert isinstance(token, str)
+        user_id, error = decode_token(token)
+        assert error is None
+        assert user_id == "123"
+
+    def test_get_user_from_token_valid(self):
+        """Verifica que get_user_from_token retorna usuario válido"""
+        request_mock = MagicMock()
+        request_mock.META = {"HTTP_AUTHORIZATION": "Bearer test-token"}
+        test_user = MagicMock(id=1)
+        
+        with patch('core.auth_utils.decode_token', return_value=("1", None)), \
+             patch('core.auth_utils.TokenBlacklist.objects.filter', return_value=MagicMock(exists=MagicMock(return_value=False))), \
+             patch('core.auth_utils.Usuarios.objects.get', return_value=test_user):
+            user = get_user_from_token(request_mock)
+            assert user == test_user
+
+    def test_get_user_from_token_invalid_auth_header(self):
+        """Verifica que get_user_from_token retorna None con header inválido"""
+        request_mock = MagicMock()
+        request_mock.META = {"HTTP_AUTHORIZATION": "InvalidHeader"}
+        user = get_user_from_token(request_mock)
+        assert user is None
+
+    def test_get_user_from_token_blacklisted(self):
+        """Verifica que get_user_from_token retorna None con token en lista negra"""
+        request_mock = MagicMock()
+        request_mock.META = {"HTTP_AUTHORIZATION": "Bearer test-token"}
+        
+        with patch('core.auth_utils.TokenBlacklist.objects.filter', return_value=MagicMock(exists=MagicMock(return_value=True))):
+            user = get_user_from_token(request_mock)
+            assert user is None
+
+    def test_get_user_from_token_decode_error(self):
+        """Verifica que get_user_from_token retorna None con error de decode"""
+        request_mock = MagicMock()
+        request_mock.META = {"HTTP_AUTHORIZATION": "Bearer test-token"}
+        
+        with patch('core.auth_utils.decode_token', return_value=(None, "TOKEN_INVALID")), \
+             patch('core.auth_utils.TokenBlacklist.objects.filter', return_value=MagicMock(exists=MagicMock(return_value=False))):
+            user = get_user_from_token(request_mock)
+            assert user is None
+
+    def test_get_user_from_token_user_not_found(self):
+        """Verifica que get_user_from_token retorna None si usuario no existe"""
+        request_mock = MagicMock()
+        request_mock.META = {"HTTP_AUTHORIZATION": "Bearer test-token"}
+        
+        with patch('core.auth_utils.decode_token', return_value=("999", None)), \
+             patch('core.auth_utils.TokenBlacklist.objects.filter', return_value=MagicMock(exists=MagicMock(return_value=False))), \
+             patch('core.auth_utils.Usuarios.objects.get', side_effect=Exception("Does not exist")):
+            user = get_user_from_token(request_mock)
+            assert user is None
+
+    def test_get_user_from_reset_token_valid(self):
+        """Verifica que get_user_from_reset_token retorna usuario válido"""
+        test_user = MagicMock(id=1)
+        
+        with patch('django.core.signing.TimestampSigner.unsign', return_value="1"), \
+             patch('core.auth_utils.Usuarios.objects.get', return_value=test_user):
+            user = get_user_from_reset_token("test-token")
+            assert user == test_user
+
+    def test_get_user_from_reset_token_expired(self):
+        """Verifica que get_user_from_reset_token retorna None con token expirado"""
+        with patch('django.core.signing.TimestampSigner.unsign', side_effect=SignatureExpired("Expired")):
+            user = get_user_from_reset_token("test-token")
+            assert user is None
+
+    def test_get_user_from_reset_token_bad_signature(self):
+        """Verifica que get_user_from_reset_token retorna None con firma inválida"""
+        with patch('django.core.signing.TimestampSigner.unsign', side_effect=BadSignature("Bad")):
+            user = get_user_from_reset_token("test-token")
+            assert user is None
+
+    def test_get_user_from_reset_token_user_not_found(self):
+        """Verifica que get_user_from_reset_token retorna None si usuario no existe"""
+        with patch('django.core.signing.TimestampSigner.unsign', return_value="999"), \
+             patch('core.auth_utils.Usuarios.objects.get', side_effect=Exception("Does not exist")):
+            user = get_user_from_reset_token("test-token")
+            assert user is None
 
 
