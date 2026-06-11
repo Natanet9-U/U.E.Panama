@@ -92,11 +92,17 @@ class AuthMiddleware:
         if request.path in self.PUBLIC_PATHS:
             return self.get_response(request)
 
+        # Try Authorization header first, then fall back to cookie
         auth_header = request.headers.get("Authorization", "")
-        if not auth_header.startswith("Bearer "):
-            return JsonResponse({"error": "No autorizado"}, status=401)
+        token = None
+        if auth_header.startswith("Bearer "):
+            token = auth_header.split(" ", 1)[1].strip()
+        else:
+            cookie_name = getattr(settings, "AUTH_COOKIE_NAME", "auth_token")
+            token = request.COOKIES.get(cookie_name)
 
-        token = auth_header.split(" ", 1)[1].strip()
+        if not token:
+            return JsonResponse({"error": "No autorizado"}, status=401)
         user_id, token_error = decode_token(token)
         if token_error == "TOKEN_EXPIRED":
             return JsonResponse({"error": "Token expirado"}, status=401)

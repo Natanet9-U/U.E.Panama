@@ -24,7 +24,7 @@ describe("authService", () => {
     localStorage.clear();
   });
 
-  it("loginRequest guarda token y usuario", async () => {
+  it("loginRequest guarda usuario en localStorage (token va en cookie httpOnly)", async () => {
     const usuario = { id: "u-1", nombre: "Ana" };
     apiClient.post.mockResolvedValue({
       data: {
@@ -40,7 +40,6 @@ describe("authService", () => {
       password: "secret",
     });
     expect(result).toEqual(usuario);
-    expect(localStorage.getItem("auth_token")).toBe("token-123");
     expect(JSON.parse(localStorage.getItem("auth_user"))).toEqual(usuario);
   });
 
@@ -59,25 +58,21 @@ describe("authService", () => {
     expect(getStoredUser()).toBeNull();
   });
 
-  it("logout limpia auth_token y auth_user", () => {
-    localStorage.setItem("auth_token", "abc");
+  it("logout limpia auth_user", () => {
     localStorage.setItem("auth_user", JSON.stringify({ id: "u-3" }));
 
     logout();
 
-    expect(localStorage.getItem("auth_token")).toBeNull();
     expect(localStorage.getItem("auth_user")).toBeNull();
   });
 
   it("logoutRequest limpia estado local aunque falle el backend", async () => {
-    localStorage.setItem("auth_token", "abc");
     localStorage.setItem("auth_user", JSON.stringify({ id: "u-4" }));
     apiClient.post.mockRejectedValue(new Error("backend down"));
 
     await logoutRequest();
 
     expect(apiClient.post).toHaveBeenCalledWith("/auth/logout/");
-    expect(localStorage.getItem("auth_token")).toBeNull();
     expect(localStorage.getItem("auth_user")).toBeNull();
   });
 

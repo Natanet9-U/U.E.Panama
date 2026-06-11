@@ -95,6 +95,8 @@ MIDDLEWARE = [
 CORS_ALLOW_ALL_ORIGINS = os.environ.get('CORS_ALLOW_ALL_ORIGINS', 'True').lower() in ('1', 'true', 'yes')
 CORS_ALLOWED_ORIGINS = [o for o in os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',') if o]
 
+CORS_ALLOW_CREDENTIALS = True
+
 CORS_ALLOW_HEADERS = [
     'accept',
     'authorization',
@@ -105,6 +107,12 @@ CORS_ALLOW_HEADERS = [
 API_DOCS_PUBLIC = DEBUG or os.environ.get('API_DOCS_PUBLIC', '').lower() == 'true'
 AUTH_TOKEN_MAX_AGE = int(os.environ.get('AUTH_TOKEN_MAX_AGE', 60 * 60 * 24))
 AUTH_TOKEN_SALT = os.environ.get('AUTH_TOKEN_SALT', 'ue.panama.auth')
+
+# Auth cookie settings
+AUTH_COOKIE_NAME = os.environ.get('AUTH_COOKIE_NAME', 'auth_token')
+AUTH_COOKIE_SECURE = not DEBUG  # True in production with HTTPS
+AUTH_COOKIE_HTTPONLY = True
+AUTH_COOKIE_SAMESITE = 'Lax'
 ROOT_URLCONF = 'config.urls'
 
 TEMPLATES = [

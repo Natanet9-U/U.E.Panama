@@ -21,22 +21,22 @@ vi.mock("axios", () => ({
 }));
 
 describe("apiClient", () => {
-  it("crea el cliente con la baseURL esperada", async () => {
+  it("crea el cliente con la baseURL esperada y withCredentials", async () => {
     const { default: apiClient } = await import("../../../src/services/apiClient");
 
     expect(mocks.create).toHaveBeenCalledWith({
-      baseURL: "http://127.0.0.1:8000/api",
+      baseURL: "/api",
       headers: { "Content-Type": "application/json" },
+      withCredentials: true,
     });
     expect(apiClient).toBeDefined();
   });
 
-  it("agrega Authorization cuando existe token", async () => {
-    localStorage.setItem("auth_token", "abc123");
+  it("agrega header X-Timezone en las peticiones", async () => {
     await import("../../../src/services/apiClient");
 
     const config = mocks.requestInterceptor.current({ headers: {} });
 
-    expect(config.headers.Authorization).toBe("Bearer abc123");
+    expect(config.headers["X-Timezone"]).toBeDefined();
   });
 });

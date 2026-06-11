@@ -1,6 +1,5 @@
 import apiClient from "./apiClient";
 
-const TOKEN_KEY = "auth_token";
 const USER_KEY = "auth_user";
 
 export async function loginRequest(email, password) {
@@ -8,9 +7,9 @@ export async function loginRequest(email, password) {
     email: String(email || "").trim().toLowerCase(),
     password: String(password || "").trim(),
   });
-  const { token, usuario } = response.data;
+  const { usuario } = response.data;
 
-  localStorage.setItem(TOKEN_KEY, token);
+  // Store user data in localStorage for UI purposes (non-sensitive)
   localStorage.setItem(USER_KEY, JSON.stringify(usuario));
 
   return usuario;
@@ -46,11 +45,12 @@ export function isAuthenticated() {
   if (process.env.NODE_ENV === "test") {
     return true;
   }
-  return Boolean(localStorage.getItem(TOKEN_KEY));
+  // Check if user data exists in localStorage (quick check)
+  // The actual auth is done by the HttpOnly cookie
+  return Boolean(localStorage.getItem(USER_KEY));
 }
 
 export function logout() {
-  localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
 }
 
