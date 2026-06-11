@@ -46,19 +46,19 @@ function EnrollmentPage() {
   const [promoteDestinoGestion, setPromoteDestinoGestion] = useState(new Date().getFullYear() + 1);
   const [promoting, setPromoting] = useState(false);
 
-  // Auto-set destino curso when student is reprobado
-  useEffect(() => {
-    if (foundStudent?.estado === "activo" && foundStudent.aprobado === false && foundStudent.curso_actual_id) {
-      setPromoteDestinoCurso(String(foundStudent.curso_actual_id));
-    }
-  }, [foundStudent]);
-
   // Search Tab State
   const [searchCI, setSearchCI] = useState("");
   const [searchLoading, setSearchLoading] = useState(false);
   const [foundStudent, setFoundStudent] = useState(null);
   const [selectedCursoForReEnroll, setSelectedCursoForReEnroll] = useState("");
   const [reEnrolling, setReEnrolling] = useState(false);
+
+  // Auto-set destino curso when student is reprobado
+  useEffect(() => {
+    if (foundStudent?.estado === "activo" && foundStudent.aprobado === false && foundStudent.curso_actual_id) {
+      setPromoteDestinoCurso(String(foundStudent.curso_actual_id));
+    }
+  }, [foundStudent]);
 
   // New Enrollment Tab State
   const [newForm, setNewForm] = useState({

@@ -32,7 +32,7 @@ export default function ProfilePage() {
       const stored = getStoredUser();
       if (stored) {
         Object.assign(stored, usuario);
-        localStorage.setItem("usuario", JSON.stringify(stored));
+        localStorage.setItem("auth_user", JSON.stringify(stored));
       }
       setSuccess("Perfil actualizado");
     } catch (err) {
