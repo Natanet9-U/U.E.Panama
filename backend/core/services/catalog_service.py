@@ -438,7 +438,7 @@ class CatalogService:
                     'total_pages': 1,
                 }
             return [
-                {'id': d.id, 'nombre': d.nombre, 'orden': d.orden, 'gestion': d.gestion}
+                {'id': d.id, 'nombre': d.nombre, 'orden': d.orden, 'gestion': d.gestion, 'puntaje_maximo': float(d.puntaje_maximo) if d.puntaje_maximo else None}
                 for d in qs
             ]
 
@@ -448,10 +448,10 @@ class CatalogService:
         offset = (page - 1) * page_size
         items = qs[offset:offset + page_size]
         return {
-            'data': [
-                {'id': d.id, 'nombre': d.nombre, 'orden': d.orden, 'gestion': d.gestion}
-                for d in items
-            ],
+                    'data': [
+                        {'id': d.id, 'nombre': d.nombre, 'orden': d.orden, 'gestion': d.gestion, 'puntaje_maximo': float(d.puntaje_maximo) if d.puntaje_maximo else None}
+                        for d in qs
+                    ],
             'total': total,
             'page': page,
             'page_size': page_size,
@@ -497,10 +497,18 @@ class CatalogService:
         if 'puntaje_maximo' in data:
             nuevo = data['puntaje_maximo']
             if nuevo is not None:
-                suma_actual = self._validar_suma_dimensiones(dim.gestion, exclude_id=dimension_id)
-                if suma_actual + float(nuevo) > 100:
-                    raise ValueError(f'La suma de puntajes máximos de las dimensiones superaría 100 (actual sin esta: {suma_actual}, nuevo: {nuevo})')
+                valor_actual = float(dim.puntaje_maximo or 0)
+                valor_nuevo = float(nuevo)
+                if valor_nuevo != valor_actual:
+                    suma_actual = self._validar_suma_dimensiones(dim.gestion, exclude_id=dimension_id)
+                    if suma_actual + valor_nuevo > 100:
+                        raise ValueError(f'La suma de puntajes máximos de las dimensiones superaría 100 (actual sin esta: {suma_actual}, nuevo: {nuevo})')
             dim.puntaje_maximo = nuevo
         dim.save()
         self.audit.record(usuario, accion='UPDATE', tabla='dimensiones_evaluacion', registro_id=dim.id, datos_nuevo={k: data[k] for k in data if k in data})
-        return {'id': dim.id, 'nombre': dim.nombre, 'orden': dim.orden}
+        return {'id': dim.id, 'nombre': dim.nombre, 'orden': dim.orden, 'puntaje_maximo': float(dim.puntaje_maximo) if dim.puntaje_maximo else None, 'gestion': dim.gestion}
+
+    # Plural aliases so the generic catalog view can resolve method names
+    crear_dimensiones = crear_dimension
+    eliminar_dimensiones = eliminar_dimension
+    actualizar_dimensiones = actualizar_dimension

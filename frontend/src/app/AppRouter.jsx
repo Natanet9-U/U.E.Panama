@@ -17,6 +17,7 @@ import HorariosPage from "../pages/horarios/HorariosPage";
 import EnrollmentPage from "../pages/inscripcion/EnrollmentPage";
 import ReportCardPage from "../pages/reportes/ReportCardPage";
 import UsuariosPage from "../pages/usuarios/UsuariosPage";
+import DimensionesPage from "../pages/dimensiones/DimensionesPage";
 import PanelAcademicoLayout from "../layouts/PanelAcademicoLayout";
 
 function AppRouter() {
@@ -63,7 +64,7 @@ function AppRouter() {
             </ProtectedRoute>
           )} />
           <Route path="/inscripcion" element={(
-            <ProtectedRoute allowedRoles={["secretaria"]}>
+            <ProtectedRoute allowedRoles={["director", "secretaria"]}>
               <EnrollmentPage />
             </ProtectedRoute>
           )} />
@@ -110,6 +111,11 @@ function AppRouter() {
           <Route path="/usuarios" element={(
             <ProtectedRoute allowedRoles={["director"]}>
               <UsuariosPage />
+            </ProtectedRoute>
+          )} />
+          <Route path="/dimensiones" element={(
+            <ProtectedRoute allowedRoles={["director"]}>
+              <DimensionesPage />
             </ProtectedRoute>
           )} />
         </Route>

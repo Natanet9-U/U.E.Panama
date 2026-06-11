@@ -1,6 +1,7 @@
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
+from django.conf import settings
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 
@@ -136,7 +137,17 @@ def login_view(request):
     data, error = AuthService().login(email, password)
     if error:
         return Response({"error": error}, status=401)
-    return Response({"mensaje": "Login exitoso", **data}, status=200)
+
+    response = Response({"mensaje": "Login exitoso", **data}, status=200)
+    response.set_cookie(
+        getattr(settings, "AUTH_COOKIE_NAME", "auth_token"),
+        data["token"],
+        max_age=getattr(settings, "AUTH_TOKEN_MAX_AGE", 60 * 60 * 24),
+        httponly=getattr(settings, "AUTH_COOKIE_HTTPONLY", True),
+        secure=getattr(settings, "AUTH_COOKIE_SECURE", False),
+        samesite=getattr(settings, "AUTH_COOKIE_SAMESITE", "Lax"),
+    )
+    return response
 
 
 @api_view(["GET", "PUT"])
@@ -163,25 +174,46 @@ def refresh_token_view(request):
     if not usuario:
         return Response({"error": "No autorizado"}, status=401)
     result = AuthService().refresh(usuario)
-    return Response(result, status=200)
+    response = Response(result, status=200)
+    response.set_cookie(
+        getattr(settings, "AUTH_COOKIE_NAME", "auth_token"),
+        result["token"],
+        max_age=getattr(settings, "AUTH_TOKEN_MAX_AGE", 60 * 60 * 24),
+        httponly=getattr(settings, "AUTH_COOKIE_HTTPONLY", True),
+        secure=getattr(settings, "AUTH_COOKIE_SECURE", False),
+        samesite=getattr(settings, "AUTH_COOKIE_SAMESITE", "Lax"),
+    )
+    return response
 
 
 @api_view(["POST"])
 @trace_view_function
 def logout_view(request):
+    # Get token from Authorization header or cookie
+    token = None
     auth = request.META.get("HTTP_AUTHORIZATION", "")
     if auth.startswith("Bearer "):
         token = auth[7:]
+    else:
+        cookie_name = getattr(settings, "AUTH_COOKIE_NAME", "auth_token")
+        token = request.COOKIES.get(cookie_name)
+
+    if token:
         usuario = _get_usuario(request)
         if usuario:
-            from django.utils import timezone
+            from django.utils import timezone as tz
             from datetime import timedelta
             TokenBlacklist.objects.create(
                 token=token,
                 usuario=usuario,
-                expira_en=timezone.now() + timedelta(hours=24),
+                expira_en=tz.now() + timedelta(hours=24),
             )
-    return Response({"mensaje": "Sesion cerrada"}, status=200)
+
+    response = Response({"mensaje": "Sesion cerrada"}, status=200)
+    response.delete_cookie(
+        getattr(settings, "AUTH_COOKIE_NAME", "auth_token"),
+    )
+    return response
 
 
 @api_view(["POST"])
